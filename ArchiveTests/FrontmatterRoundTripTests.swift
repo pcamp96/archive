@@ -1,0 +1,63 @@
+import Testing
+@testable import Archive
+
+struct FrontmatterRoundTripTests {
+    @Test
+    func scannerParsesSupportedProperties() {
+        let source = """
+        ---
+        title: Draft Review
+        status: In Progress
+        published: false
+        tags:
+          - review
+          - hardware
+        due: 2026-04-20
+        ---
+
+        # Heading
+
+        Body
+        """
+
+        let parsed = FrontmatterScanner().parse(source)
+        let registry = PropertyRegistry()
+        let properties = parsed.frontmatter.editableProperties(using: registry)
+
+        #expect(properties.first(where: { $0.key == "title" })?.value.stringValue == "Draft Review")
+        #expect(properties.first(where: { $0.key == "status" })?.value.stringValue == "In Progress")
+        #expect(properties.first(where: { $0.key == "published" })?.value == .bool(false))
+        #expect(properties.first(where: { $0.key == "due" })?.value == .date("2026-04-20"))
+        #expect(properties.first(where: { $0.key == "tags" })?.value == .stringList(["review", "hardware"]))
+        #expect(parsed.body == "# Heading\n\nBody")
+    }
+
+    @Test
+    func codecPreservesUnsupportedEntriesWhileUpdatingEditableOnes() {
+        let source = """
+        ---
+        title: Old
+        config:
+          nested: true
+        status: Draft
+        ---
+
+        Body
+        """
+
+        let parsed = FrontmatterScanner().parse(source)
+        let codec = FrontmatterCodec()
+        let output = codec.serializedFrontmatter(
+            from: parsed.frontmatter,
+            title: "New",
+            properties: [
+                EditableProperty(key: "status", kind: .singleSelect, value: .string("Published"), isReadOnly: false, issue: nil)
+            ]
+        )
+
+        #expect(output != nil)
+        #expect(output?.contains("title: New") == true)
+        #expect(output?.contains("status: Published") == true)
+        #expect(output?.contains("config:\n  nested: true") == true)
+    }
+}
