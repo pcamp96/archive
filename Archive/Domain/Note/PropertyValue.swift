@@ -22,6 +22,10 @@ enum PropertyKind: String, Codable, CaseIterable, Hashable, Sendable {
         case .unsupported: return "Unsupported"
         }
     }
+
+    static var creatableKinds: [PropertyKind] {
+        [.text, .textarea, .boolean, .singleSelect, .multiSelect, .date, .url]
+    }
 }
 
 enum PropertyValue: Hashable, Sendable {
@@ -61,6 +65,60 @@ struct PropertyDefinition: Codable, Hashable, Sendable {
 
     var isBoardEligible: Bool {
         kind == .text || kind == .singleSelect
+    }
+}
+
+struct PropertyCreationState: Identifiable, Hashable, Sendable {
+    let id: UUID
+    var key: String
+    var kind: PropertyKind
+    var optionsText: String
+
+    init(
+        id: UUID = UUID(),
+        key: String = "",
+        kind: PropertyKind = .text,
+        optionsText: String = ""
+    ) {
+        self.id = id
+        self.key = key
+        self.kind = kind
+        self.optionsText = optionsText
+    }
+
+    var normalizedKey: String {
+        key.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var optionValues: [String] {
+        optionsText
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
+    }
+
+    var definition: PropertyDefinition? {
+        guard normalizedKey.isEmpty == false else { return nil }
+        return PropertyDefinition(key: normalizedKey, kind: kind, options: optionValues)
+    }
+
+    var initialValue: PropertyValue {
+        switch kind {
+        case .text, .textarea:
+            return .string("")
+        case .boolean:
+            return .bool(false)
+        case .singleSelect:
+            return .string(optionValues.first ?? "")
+        case .multiSelect:
+            return .stringList([])
+        case .date:
+            return .date("")
+        case .url:
+            return .url("")
+        case .unsupported:
+            return .raw("")
+        }
     }
 }
 

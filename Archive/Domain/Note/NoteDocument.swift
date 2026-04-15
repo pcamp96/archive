@@ -11,6 +11,25 @@ struct NoteSummary: Identifiable, Hashable, Sendable {
     let propertyValues: [String: PropertyValue]
 }
 
+extension NoteSummary {
+    init(document: NoteDocument) {
+        let propertyMap = Dictionary(uniqueKeysWithValues: document.editableProperties.map { ($0.key, $0.value) })
+        self.init(
+            id: document.id,
+            fileURL: document.fileURL,
+            relativePath: document.relativePath,
+            title: document.title,
+            bodyPreview: document.body
+                .components(separatedBy: .newlines)
+                .first(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false })?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            createdAt: document.createdAt,
+            modifiedAt: document.modifiedAt,
+            propertyValues: propertyMap
+        )
+    }
+}
+
 struct NoteDocument: Hashable, Sendable {
     let id: NoteID
     let rootURL: URL

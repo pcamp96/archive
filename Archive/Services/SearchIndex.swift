@@ -26,6 +26,16 @@ actor SearchIndex {
         })
     }
 
+    func update(with note: NoteSummary) {
+        entries[note.id] = Entry(
+            noteID: note.id,
+            title: normalized(note.title),
+            body: normalized(note.bodyPreview),
+            propertyText: normalized(note.propertyValues.values.map(\.stringValue).joined(separator: " ")),
+            modifiedAt: note.modifiedAt
+        )
+    }
+
     func search(query: String) -> [SearchResult] {
         let normalizedQuery = normalized(query)
         guard normalizedQuery.isEmpty == false else { return [] }
@@ -59,4 +69,3 @@ actor SearchIndex {
         string.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
     }
 }
-

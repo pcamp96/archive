@@ -53,4 +53,3 @@ private extension JSONEncoder {
         return encoder
     }
 }
-

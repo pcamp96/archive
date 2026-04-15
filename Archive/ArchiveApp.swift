@@ -13,9 +13,15 @@ struct ArchiveApp: App {
                     await container.appSession.restoreLastWorkspaceIfPossible()
                 }
                 .onChange(of: scenePhase) { _, newValue in
-                    guard newValue == .active else { return }
                     Task {
-                        await container.appSession.refreshActiveWorkspace()
+                        switch newValue {
+                        case .active:
+                            await container.appSession.refreshActiveWorkspace()
+                        case .inactive, .background:
+                            await container.appSession.workspaceSession?.flushActiveNote()
+                        @unknown default:
+                            break
+                        }
                     }
                 }
         }
@@ -24,8 +30,7 @@ struct ArchiveApp: App {
         }
 
         Settings {
-            SettingsView()
+            SettingsView(settings: container.appSettings)
         }
     }
 }
-

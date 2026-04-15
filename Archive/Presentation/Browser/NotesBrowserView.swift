@@ -5,18 +5,11 @@ struct NotesBrowserView: View {
 
     var body: some View {
         Group {
-            if session.filteredNotes.isEmpty {
-                EmptyStateView(
-                    title: "No Notes",
-                    message: "Create a markdown note in this workspace to populate the browser."
-                )
-            } else {
-                switch session.browserState.presentationMode {
-                case .list:
-                    NotesListView(session: session)
-                case .board:
-                    NotesBoardView(session: session)
-                }
+            switch session.browserState.presentationMode {
+            case .list:
+                listContent
+            case .board:
+                boardContent
             }
         }
         .navigationTitle(columnTitle)
@@ -32,13 +25,14 @@ struct NotesBrowserView: View {
                 }
                 .pickerStyle(.segmented)
 
-                if session.browserState.presentationMode == .board {
-                    Picker("Group By", selection: boardPropertyBinding) {
-                        ForEach(session.propertyRegistry.orderedDefinitions.filter(\.isBoardEligible), id: \.key) { definition in
-                            Text(definition.key).tag(definition.key)
+                if session.browserState.presentationMode == .board,
+                   session.viewPreferences.savedBoardViews.isEmpty == false {
+                    Picker("Board", selection: boardSelectionBinding) {
+                        ForEach(session.viewPreferences.savedBoardViews) { boardView in
+                            Text(boardView.name).tag(boardView.id)
                         }
                     }
-                    .frame(width: 180)
+                    .frame(width: 220)
                 }
 
                 Button {
@@ -59,6 +53,37 @@ struct NotesBrowserView: View {
         return session.browserState.selectedFolderURL?.lastPathComponent ?? "Notes"
     }
 
+    @ViewBuilder
+    private var listContent: some View {
+        if session.filteredNotes.isEmpty {
+            EmptyStateView(
+                title: "No Notes",
+                message: "Create a markdown note in this workspace to populate the browser."
+            )
+        } else {
+            NotesListView(session: session)
+        }
+    }
+
+    @ViewBuilder
+    private var boardContent: some View {
+        if let activeBoardView = session.activeBoardView {
+            NotesBoardView(session: session, boardView: activeBoardView)
+        } else {
+            ContentUnavailableView {
+                Label("No Workflow Board Yet", systemImage: "square.grid.3x2")
+            } description: {
+                Text("Create a workflow property like status to organize notes into lanes.")
+            } actions: {
+                Button("Create Workflow Property") {
+                    Task {
+                        await session.createProperty(defaultWorkflowState, addToCurrentNote: false)
+                    }
+                }
+            }
+        }
+    }
+
     private var presentationModeBinding: Binding<NotesPresentationMode> {
         Binding(
             get: { session.browserState.presentationMode },
@@ -66,11 +91,18 @@ struct NotesBrowserView: View {
         )
     }
 
-    private var boardPropertyBinding: Binding<String> {
+    private var boardSelectionBinding: Binding<UUID> {
         Binding(
-            get: { session.browserState.boardPropertyKey ?? session.propertyRegistry.defaultBoardPropertyKey ?? "status" },
-            set: { session.updateBoardProperty($0) }
+            get: { session.activeBoardView?.id ?? session.viewPreferences.savedBoardViews.first?.id ?? UUID() },
+            set: { session.updateBoardSelection($0) }
+        )
+    }
+
+    private var defaultWorkflowState: PropertyCreationState {
+        PropertyCreationState(
+            key: "status",
+            kind: .singleSelect,
+            optionsText: "Idea, Draft, In Review, Ready, Published"
         )
     }
 }
-

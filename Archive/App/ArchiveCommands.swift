@@ -18,7 +18,7 @@ struct ArchiveCommands: Commands {
         }
 
         CommandMenu("Archive") {
-            Button("Save Note") {
+            Button("Save Now") {
                 session.saveCurrentNote()
             }
             .keyboardShortcut("s")
@@ -30,6 +30,16 @@ struct ArchiveCommands: Commands {
             .keyboardShortcut("b")
             .disabled(session.workspaceSession == nil)
         }
+
+        CommandMenu("Editor") {
+            Picker("Markdown Display", selection: Binding(
+                get: { session.appSettings.markdownDisplayMode },
+                set: { session.appSettings.markdownDisplayMode = $0 }
+            )) {
+                ForEach(MarkdownDisplayMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+        }
     }
 }
-

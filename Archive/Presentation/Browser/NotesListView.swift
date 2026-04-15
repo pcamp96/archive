@@ -7,14 +7,23 @@ struct NotesListView: View {
         List(selection: selectedNoteBinding) {
             ForEach(session.filteredNotes) { note in
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(note.title)
-                        .font(.body.weight(.medium))
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(note.title)
+                            .font(.body.weight(.medium))
+
+                        if let status = note.propertyValues["status"]?.stringValue,
+                           status.isEmpty == false {
+                            MetadataChip(title: status, prominence: .secondary)
+                        }
+                    }
+
                     if note.bodyPreview.isEmpty == false {
                         Text(note.bodyPreview)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
+
                     Text(note.relativePath)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -24,7 +33,10 @@ struct NotesListView: View {
             }
         }
         .onChange(of: session.browserState.selectedNoteID) { _, noteID in
-            guard let noteID, let summary = session.filteredNotes.first(where: { $0.id == noteID }) ?? session.notes.first(where: { $0.id == noteID }) else { return }
+            guard let noteID,
+                  let summary = session.filteredNotes.first(where: { $0.id == noteID }) ?? session.notes.first(where: { $0.id == noteID }) else {
+                return
+            }
             session.openNote(summary)
         }
     }
@@ -36,4 +48,3 @@ struct NotesListView: View {
         )
     }
 }
-

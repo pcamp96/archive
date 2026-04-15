@@ -1,12 +1,28 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @Bindable var settings: AppSettings
+
     var body: some View {
         Form {
-            Text("Archive V1 focuses on a local-first markdown workspace. Publishing connectors and additional preferences will land on top of this foundation.")
-                .fixedSize(horizontal: false, vertical: true)
+            Section("Editor") {
+                Picker("Markdown Display", selection: $settings.markdownDisplayMode) {
+                    ForEach(MarkdownDisplayMode.allCases) { mode in
+                        VStack(alignment: .leading) {
+                            Text(mode.title)
+                            Text(mode.subtitle)
+                        }
+                        .tag(mode)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+
+                Text("Archive always writes canonical markdown to disk. Display mode only changes presentation, not storage.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(24)
-        .frame(width: 420)
+        .frame(width: 460)
     }
 }

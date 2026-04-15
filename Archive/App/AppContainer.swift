@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 @Observable
 final class AppContainer {
+    let appSettings: AppSettings
     let fileAccess: FileCoordinatorIO
     let bookmarkStore: BookmarkStore
     let metadataStore: WorkspaceMetadataStore
@@ -14,6 +15,7 @@ final class AppContainer {
     let appSession: AppSession
 
     init() {
+        let appSettings = AppSettings()
         let fileAccess = FileCoordinatorIO()
         let bookmarkStore = BookmarkStore()
         let metadataStore = WorkspaceMetadataStore()
@@ -28,6 +30,7 @@ final class AppContainer {
         let exportService = ExportService(renderer: MarkdownHTMLRenderer())
         let publishService = PublishService()
 
+        self.appSettings = appSettings
         self.fileAccess = fileAccess
         self.bookmarkStore = bookmarkStore
         self.metadataStore = metadataStore
@@ -37,6 +40,7 @@ final class AppContainer {
         self.exportService = exportService
         self.publishService = publishService
         self.appSession = AppSession(
+            appSettings: appSettings,
             bookmarkStore: bookmarkStore,
             workspaceRepository: workspaceRepository,
             noteRepository: noteRepository,
@@ -44,4 +48,3 @@ final class AppContainer {
         )
     }
 }
-

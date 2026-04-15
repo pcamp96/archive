@@ -5,6 +5,8 @@ import Observation
 @MainActor
 @Observable
 final class AppSession {
+    let appSettings: AppSettings
+
     enum PresentedError: Identifiable {
         case message(title: String, details: String)
 
@@ -40,11 +42,13 @@ final class AppSession {
     var presentedError: PresentedError?
 
     init(
+        appSettings: AppSettings,
         bookmarkStore: BookmarkStore,
         workspaceRepository: WorkspaceRepository,
         noteRepository: NoteRepository,
         exportService: ExportService
     ) {
+        self.appSettings = appSettings
         self.bookmarkStore = bookmarkStore
         self.workspaceRepository = workspaceRepository
         self.noteRepository = noteRepository
@@ -115,12 +119,14 @@ final class AppSession {
     func saveCurrentNote() {
         guard let workspaceSession else { return }
         Task {
-            await workspaceSession.saveActiveNote()
+            await workspaceSession.flushActiveNote()
         }
     }
 
     func switchPresentationMode() {
-        workspaceSession?.browserState.presentationMode.toggle()
+        guard let workspaceSession else { return }
+        let nextMode: NotesPresentationMode = workspaceSession.browserState.presentationMode == .list ? .board : .list
+        workspaceSession.updatePresentationMode(nextMode)
     }
 
     private func openWorkspace(at url: URL, bookmarkData: Data?) async throws {
@@ -131,6 +137,7 @@ final class AppSession {
         let session = WorkspaceSession(
             rootURL: url,
             bookmarkData: resolvedBookmark,
+            appSettings: appSettings,
             workspaceRepository: workspaceRepository,
             noteRepository: noteRepository,
             exportService: exportService
@@ -154,4 +161,3 @@ struct RecentWorkspace: Codable, Hashable, Sendable, Identifiable {
         url.lastPathComponent
     }
 }
-

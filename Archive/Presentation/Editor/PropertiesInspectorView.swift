@@ -3,34 +3,88 @@ import SwiftUI
 struct PropertiesInspectorView: View {
     @Binding var properties: [EditableProperty]
     let registry: PropertyRegistry
+    let onChange: () -> Void
+    let onAddProperty: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Properties")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Properties")
+                    .font(.headline)
+                Spacer()
+                Button("+ Property", action: onAddProperty)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+            }
 
-            if properties.isEmpty {
-                Text("No editable properties in this note yet.")
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
-            } else {
-                ForEach(Array(properties.enumerated()), id: \.element.id) { index, property in
-                    PropertyEditorRow(
-                        property: binding(for: index),
-                        definition: registry.definition(for: property.key)
-                    )
-                }
+            ForEach(Array(properties.enumerated()), id: \.element.id) { index, _ in
+                PropertyEditorRow(
+                    property: binding(for: index),
+                    definition: registry.definition(for: properties[index].key)
+                )
             }
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 14))
+        .padding(18)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.45), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func binding(for index: Int) -> Binding<EditableProperty> {
         Binding(
             get: { properties[index] },
-            set: { properties[index] = $0 }
+            set: {
+                properties[index] = $0
+                onChange()
+            }
         )
+    }
+}
+
+struct PropertyCreationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var state = PropertyCreationState()
+    let save: (PropertyCreationState) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Add Property")
+                .font(.title2.weight(.semibold))
+
+            VStack(alignment: .leading, spacing: 12) {
+                TextField("Property name", text: $state.key)
+                    .textFieldStyle(.roundedBorder)
+
+                Picker("Type", selection: $state.kind) {
+                    ForEach(PropertyKind.creatableKinds, id: \.self) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+
+                if state.kind == .singleSelect || state.kind == .multiSelect {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Options")
+                            .font(.subheadline.weight(.medium))
+                        TextField("Comma-separated values", text: $state.optionsText)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                Button("Add") {
+                    save(state)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(state.definition == nil)
+            }
+        }
+        .padding(24)
+        .frame(width: 360)
     }
 }
 
@@ -39,14 +93,15 @@ private struct PropertyEditorRow: View {
     let definition: PropertyDefinition?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
                 Text(property.key)
                     .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
                 Spacer()
                 Text(property.kind.displayName)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             }
 
             if property.isReadOnly {
@@ -64,7 +119,7 @@ private struct PropertyEditorRow: View {
                     .foregroundStyle(.orange)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder
@@ -76,8 +131,9 @@ private struct PropertyEditorRow: View {
         case .textarea:
             TextEditor(text: stringBinding)
                 .font(.body)
-                .frame(minHeight: 72)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                .frame(minHeight: 76)
+                .padding(8)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         case .boolean:
             Toggle(isOn: boolBinding) {
                 Text("Enabled")
@@ -88,7 +144,8 @@ private struct PropertyEditorRow: View {
                 ForEach(definition?.options ?? [], id: \.self) { option in
                     Text(option).tag(option)
                 }
-                if let currentValue = currentStringValue, (definition?.options.contains(currentValue) == false) {
+                if let currentValue = currentStringValue,
+                   definition?.options.contains(currentValue) == false {
                     Text(currentValue).tag(currentValue)
                 }
             }
@@ -125,7 +182,9 @@ private struct PropertyEditorRow: View {
     private var boolBinding: Binding<Bool> {
         Binding(
             get: {
-                if case .bool(let value) = property.value { return value }
+                if case .bool(let value) = property.value {
+                    return value
+                }
                 return false
             },
             set: { property.value = .bool($0) }
@@ -178,9 +237,9 @@ private struct PropertyEditorRow: View {
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .iso8601)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
 }
-

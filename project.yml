@@ -1,6 +1,6 @@
 name: Archive
 options:
-  bundleIdPrefix: com.pcamp96
+  bundleIdPrefix: com.campanale
   deploymentTarget:
     macOS: "15.0"
 packages:
@@ -15,7 +15,7 @@ settings:
     SWIFT_VERSION: 6.0
     MACOSX_DEPLOYMENT_TARGET: 15.0
     GENERATE_INFOPLIST_FILE: YES
-    PRODUCT_BUNDLE_IDENTIFIER: com.pcamp96.Archive
+    PRODUCT_BUNDLE_IDENTIFIER: com.campanale.Archive
     CURRENT_PROJECT_VERSION: 1
     MARKETING_VERSION: 0.1.0
 targets:
@@ -30,6 +30,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Archive
         INFOPLIST_KEY_NSPrincipalClass: NSApplication
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 7YRDJ7AV9J
         ENABLE_APP_SANDBOX: NO
     dependencies:
       - package: Markdown
@@ -47,4 +48,3 @@ targets:
         BUNDLE_LOADER: "$(TEST_HOST)"
     dependencies:
       - target: Archive
-

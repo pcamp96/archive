@@ -28,7 +28,17 @@ final class WorkspaceRepository: @unchecked Sendable {
         try await metadataStore.savePropertyRegistry(registry, for: rootURL)
 
         let summaries = try await loadSummaries(from: fileURLs, rootURL: rootURL, registry: registry)
-        let viewPreferences = try await metadataStore.loadViewPreferences(for: rootURL)
+        var viewPreferences = try await metadataStore.loadViewPreferences(for: rootURL)
+        if viewPreferences.savedBoardViews.isEmpty, let propertyKey = registry.defaultBoardPropertyKey {
+            let defaultBoard = SavedBoardView(
+                name: propertyKey == "status" ? "Status Board" : "\(propertyKey.capitalized) Board",
+                groupByProperty: propertyKey,
+                laneOrder: registry.definition(for: propertyKey)?.options ?? []
+            )
+            viewPreferences.savedBoardViews = [defaultBoard]
+            viewPreferences.selectedBoardViewID = defaultBoard.id
+            try await metadataStore.saveViewPreferences(viewPreferences, for: rootURL)
+        }
         await searchIndex.rebuild(with: summaries)
 
         return WorkspaceSnapshot(
@@ -44,8 +54,16 @@ final class WorkspaceRepository: @unchecked Sendable {
         try await metadataStore.saveViewPreferences(preferences, for: rootURL)
     }
 
+    func savePropertyRegistry(_ registry: PropertyRegistry, for rootURL: URL) async throws {
+        try await metadataStore.savePropertyRegistry(registry, for: rootURL)
+    }
+
     func search(query: String, rootURL: URL) async -> [SearchResult] {
         await searchIndex.search(query: query)
+    }
+
+    func updateSearchIndex(with summary: NoteSummary) async {
+        await searchIndex.update(with: summary)
     }
 
     func createNote(in folderURL: URL, title: String) async throws -> URL {
@@ -148,10 +166,15 @@ final class WorkspaceRepository: @unchecked Sendable {
 }
 
 enum BoardGroupingService {
-    static func columns(for notes: [NoteSummary], propertyKey: String, registry: PropertyRegistry) -> [BoardColumn] {
+    static func columns(
+        for notes: [NoteSummary],
+        boardView: SavedBoardView,
+        registry: PropertyRegistry
+    ) -> [BoardColumn] {
+        let propertyKey = boardView.groupByProperty
         let definition = registry.definition(for: propertyKey)
         guard definition?.isBoardEligible == true else {
-            return [BoardColumn(key: nil, title: "No Value", notes: notes)]
+            return [BoardColumn(key: nil, title: "Unassigned", notes: notes)]
         }
 
         var grouped: [String?: [NoteSummary]] = [:]
@@ -166,14 +189,16 @@ enum BoardGroupingService {
             grouped[key, default: []].append(note)
         }
 
-        let configuredKeys = definition?.options.map(Optional.some) ?? []
+        let configuredKeys = boardView.laneOrder.isEmpty
+            ? (definition?.options.map(Optional.some) ?? [])
+            : boardView.laneOrder.map(Optional.some)
         let discoveredKeys = grouped.keys.filter { $0 != nil && configuredKeys.contains($0) == false }.sorted { ($0 ?? "") < ($1 ?? "") }
         let orderedKeys = configuredKeys + discoveredKeys + [nil]
 
         return orderedKeys.compactMap { key in
             let notes = (grouped[key] ?? []).sorted(using: KeyPathComparator(\.modifiedAt, order: .reverse))
             guard notes.isEmpty == false || key == nil else { return nil }
-            return BoardColumn(key: key, title: key ?? "No Value", notes: notes)
+            return BoardColumn(key: key, title: key ?? "Unassigned", notes: notes)
         }
     }
 }

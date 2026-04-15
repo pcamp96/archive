@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Archive
 
@@ -31,8 +32,14 @@ struct BoardGroupingTests {
             )
         ]
 
-        let columns = BoardGroupingService.columns(for: notes, propertyKey: "status", registry: registry)
-        #expect(columns.map(\.title) == ["Draft", "No Value"])
+        let boardView = SavedBoardView(
+            name: "Status Board",
+            groupByProperty: "status",
+            laneOrder: ["Draft", "Published"]
+        )
+
+        let columns = BoardGroupingService.columns(for: notes, boardView: boardView, registry: registry)
+        #expect(columns.map(\.title) == ["Draft", "Unassigned"])
         #expect(columns.first?.notes.count == 1)
         #expect(columns.last?.notes.count == 1)
     }

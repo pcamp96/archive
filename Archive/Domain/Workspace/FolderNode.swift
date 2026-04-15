@@ -19,6 +19,6 @@ struct WorkspaceSnapshot: Sendable {
 struct WorkspaceViewPreferences: Codable, Hashable, Sendable {
     var version = 1
     var presentationMode: NotesPresentationMode = .list
-    var boardPropertyKey: String?
+    var selectedBoardViewID: UUID?
+    var savedBoardViews: [SavedBoardView] = []
 }
-
