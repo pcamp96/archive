@@ -13,7 +13,6 @@ struct NoteSummary: Identifiable, Hashable, Sendable {
 
 extension NoteSummary {
     init(document: NoteDocument) {
-        let propertyMap = Dictionary(uniqueKeysWithValues: document.editableProperties.map { ($0.key, $0.value) })
         self.init(
             id: document.id,
             fileURL: document.fileURL,
@@ -25,8 +24,21 @@ extension NoteSummary {
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
             createdAt: document.createdAt,
             modifiedAt: document.modifiedAt,
-            propertyValues: propertyMap
+            propertyValues: document.editableProperties.summaryPropertyMap()
         )
+    }
+}
+
+extension Sequence where Element == EditableProperty {
+    func summaryPropertyMap() -> [String: PropertyValue] {
+        var properties: [String: PropertyValue] = [:]
+
+        for property in self where property.key != "title" {
+            guard properties[property.key] == nil else { continue }
+            properties[property.key] = property.value
+        }
+
+        return properties
     }
 }
 

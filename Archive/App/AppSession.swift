@@ -126,7 +126,9 @@ final class AppSession {
     func switchPresentationMode() {
         guard let workspaceSession else { return }
         let nextMode: NotesPresentationMode = workspaceSession.browserState.presentationMode == .list ? .board : .list
-        workspaceSession.updatePresentationMode(nextMode)
+        Task {
+            await workspaceSession.updatePresentationMode(nextMode)
+        }
     }
 
     private func openWorkspace(at url: URL, bookmarkData: Data?) async throws {

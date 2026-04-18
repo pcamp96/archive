@@ -65,18 +65,17 @@ final class FileCoordinatorIO: @unchecked Sendable {
     func createFile(at url: URL, contents: String) throws {
         let data = Data(contents.utf8)
         try createDirectoryIfNeeded(at: url.deletingLastPathComponent())
-        fileManager.createFile(atPath: url.path, contents: data)
+        guard fileManager.createFile(atPath: url.path, contents: data) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
     }
 
     func moveItem(at sourceURL: URL, to destinationURL: URL) throws {
         var coordinationError: NSError?
         var moveError: Error?
         let coordinator = NSFileCoordinator(filePresenter: nil)
-        coordinator.coordinate(writingItemAt: sourceURL, options: .forMoving, writingItemAt: destinationURL, options: .forReplacing, error: &coordinationError) { source, destination in
+        coordinator.coordinate(writingItemAt: sourceURL, options: .forMoving, writingItemAt: destinationURL, options: [], error: &coordinationError) { source, destination in
             do {
-                if fileManager.fileExists(atPath: destination.path) {
-                    try fileManager.removeItem(at: destination)
-                }
                 try fileManager.moveItem(at: source, to: destination)
             } catch {
                 moveError = error
@@ -101,14 +100,20 @@ final class FileCoordinatorIO: @unchecked Sendable {
         guard let enumerator = fileManager.enumerator(
             at: rootURL,
             includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            options: [.skipsHiddenFiles, .skipsPackageDescendants],
+            errorHandler: { _, _ in true }
         ) else {
             return []
         }
 
         var urls: [URL] = []
         for case let url as URL in enumerator {
-            let values = try url.resourceValues(forKeys: keys)
+            let values: URLResourceValues
+            do {
+                values = try url.resourceValues(forKeys: keys)
+            } catch {
+                continue
+            }
             if values.isSymbolicLink == true {
                 enumerator.skipDescendants()
                 continue
@@ -131,14 +136,20 @@ final class FileCoordinatorIO: @unchecked Sendable {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isPackageKey, .isHiddenKey, .isSymbolicLinkKey, .nameKey]
         let contents = try fileManager.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: Array(keys))
 
-        let childFolders = try contents.compactMap { url -> FolderNode? in
-            let values = try url.resourceValues(forKeys: keys)
-            guard values.isDirectory == true else { return nil }
-            guard values.isPackage != true, values.isHidden != true, values.isSymbolicLink != true else { return nil }
-            guard values.name != ".archive" else { return nil }
-            return try folderTree(in: url)
+        var childFolders: [FolderNode] = []
+        for url in contents {
+            do {
+                let values = try url.resourceValues(forKeys: keys)
+                guard values.isDirectory == true else { continue }
+                guard values.isPackage != true, values.isHidden != true, values.isSymbolicLink != true else { continue }
+                guard values.name != ".archive" else { continue }
+                guard let childTree = try? folderTree(in: url) else { continue }
+                childFolders.append(childTree)
+            } catch {
+                continue
+            }
         }
-        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        childFolders.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
         return FolderNode(url: rootURL, children: childFolders)
     }
@@ -146,8 +157,9 @@ final class FileCoordinatorIO: @unchecked Sendable {
     func metadata(for url: URL) throws -> (id: NoteID, token: FileVersionToken, createdAt: Date, modifiedAt: Date) {
         let values = try url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey, .fileSizeKey, .fileResourceIdentifierKey])
         let identifier = values.fileResourceIdentifier.map { String(describing: $0) } ?? url.standardizedFileURL.path
+        let normalizedPath = url.standardizedFileURL.path
         return (
-            id: NoteID(resourceIdentifier: identifier, path: url.path),
+            id: NoteID(resourceIdentifier: identifier, path: normalizedPath),
             token: FileVersionToken(modificationDate: values.contentModificationDate, fileSize: values.fileSize.map(Int64.init)),
             createdAt: values.creationDate ?? .distantPast,
             modifiedAt: values.contentModificationDate ?? .distantPast

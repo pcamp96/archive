@@ -2,6 +2,7 @@ import SwiftUI
 
 struct NotesBrowserView: View {
     @Bindable var session: WorkspaceSession
+    @State private var isShowingStatusesSheet = false
 
     var body: some View {
         Group {
@@ -33,6 +34,12 @@ struct NotesBrowserView: View {
                         }
                     }
                     .frame(width: 220)
+
+                    if let editableBoardPropertyName {
+                        Button("\(editableBoardPropertyName.capitalized)…") {
+                            isShowingStatusesSheet = true
+                        }
+                    }
                 }
 
                 Button {
@@ -41,6 +48,18 @@ struct NotesBrowserView: View {
                     }
                 } label: {
                     Label("New Note", systemImage: "plus")
+                }
+            }
+        }
+        .sheet(isPresented: $isShowingStatusesSheet) {
+            if let editableBoardPropertyName {
+                StatusOptionsSheet(
+                    propertyName: editableBoardPropertyName,
+                    options: session.propertyRegistry.definition(for: editableBoardPropertyName)?.options ?? []
+                ) { options in
+                    Task {
+                        await session.updatePropertyDefinitionOptions(for: editableBoardPropertyName, options: options)
+                    }
                 }
             }
         }
@@ -87,15 +106,31 @@ struct NotesBrowserView: View {
     private var presentationModeBinding: Binding<NotesPresentationMode> {
         Binding(
             get: { session.browserState.presentationMode },
-            set: { session.updatePresentationMode($0) }
+            set: { newValue in
+                Task {
+                    await session.updatePresentationMode(newValue)
+                }
+            }
         )
     }
 
     private var boardSelectionBinding: Binding<UUID> {
         Binding(
             get: { session.activeBoardView?.id ?? session.viewPreferences.savedBoardViews.first?.id ?? UUID() },
-            set: { session.updateBoardSelection($0) }
+            set: { newValue in
+                Task {
+                    await session.updateBoardSelection(newValue)
+                }
+            }
         )
+    }
+
+    private var editableBoardPropertyName: String? {
+        guard let activeBoardView = session.activeBoardView,
+              session.propertyRegistry.definition(for: activeBoardView.groupByProperty)?.kind == .singleSelect else {
+            return nil
+        }
+        return activeBoardView.groupByProperty
     }
 
     private var defaultWorkflowState: PropertyCreationState {
@@ -104,5 +139,61 @@ struct NotesBrowserView: View {
             kind: .singleSelect,
             optionsText: "Idea, Draft, In Review, Ready, Published"
         )
+    }
+}
+
+private struct StatusOptionsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let propertyName: String
+    let save: ([String]) -> Void
+
+    @State private var optionsText: String
+
+    init(propertyName: String, options: [String], save: @escaping ([String]) -> Void) {
+        self.propertyName = propertyName
+        self.save = save
+        _optionsText = State(initialValue: options.joined(separator: ", "))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Edit \(propertyDisplayName)")
+                .font(.title2.weight(.semibold))
+
+            Text("Update the lane order and suggested values for \(propertyName). Existing notes keep their current status until you change them.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(propertyDisplayName)
+                    .font(.subheadline.weight(.medium))
+                TextField("Comma-separated values", text: $optionsText)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                Button("Save") {
+                    save(
+                        optionsText
+                            .split(separator: ",")
+                            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                            .filter { $0.isEmpty == false }
+                    )
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
+    }
+
+    private var propertyDisplayName: String {
+        propertyName.capitalized
     }
 }

@@ -11,7 +11,11 @@ struct FrontmatterCodec {
         var chunks: [String] = []
         let titleValue = title.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let editableMap = Dictionary(uniqueKeysWithValues: properties.map { ($0.key, $0) })
+        var editableMap: [String: EditableProperty] = [:]
+        for property in properties where property.isReadOnly == false {
+            guard editableMap[property.key] == nil else { continue }
+            editableMap[property.key] = property
+        }
 
         for segment in document.segments {
             switch segment {
@@ -23,6 +27,11 @@ struct FrontmatterCodec {
                         chunks.append(render(key: "title", property: EditableProperty(key: "title", kind: .text, value: .string(titleValue), isReadOnly: false, issue: nil)))
                     }
                     consumedKeys.insert("title")
+                    continue
+                }
+
+                if consumedKeys.contains(entry.key) {
+                    chunks.append(entry.rawContent)
                     continue
                 }
 
@@ -42,6 +51,7 @@ struct FrontmatterCodec {
 
         for property in properties where property.isReadOnly == false && consumedKeys.contains(property.key) == false {
             chunks.append(render(key: property.key, property: property))
+            consumedKeys.insert(property.key)
         }
 
         guard chunks.isEmpty == false else { return nil }
@@ -68,4 +78,3 @@ struct FrontmatterCodec {
         return (try? Yams.dump(object: object).trimmingCharacters(in: .whitespacesAndNewlines)) ?? "\(key): \(property.value.stringValue)"
     }
 }
-

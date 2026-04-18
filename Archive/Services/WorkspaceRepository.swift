@@ -1,5 +1,16 @@
 import Foundation
 
+enum WorkspaceRepositoryError: LocalizedError, Equatable {
+    case noteAlreadyExists(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noteAlreadyExists(let filename):
+            return "A note named \"\(filename)\" already exists in that location."
+        }
+    }
+}
+
 final class WorkspaceRepository: @unchecked Sendable {
     private let fileAccess: FileCoordinatorIO
     private let noteRepository: NoteRepository
@@ -22,12 +33,16 @@ final class WorkspaceRepository: @unchecked Sendable {
         let folderTree = try fileAccess.folderTree(in: rootURL)
         let fileURLs = try fileAccess.markdownFileURLs(in: rootURL)
 
-        var registry = try await metadataStore.loadPropertyRegistry(for: rootURL)
-        let initialSummaries = try await loadSummaries(from: fileURLs, rootURL: rootURL, registry: registry)
-        registry = merge(registry: registry, with: initialSummaries)
-        try await metadataStore.savePropertyRegistry(registry, for: rootURL)
+        let persistedRegistry = try await metadataStore.loadPropertyRegistry(for: rootURL)
+        let initialSummaries = try await loadSummaries(from: fileURLs, rootURL: rootURL, registry: persistedRegistry)
+        let registry = merge(registry: persistedRegistry, with: initialSummaries)
+        if registry != persistedRegistry {
+            try? await metadataStore.savePropertyRegistry(registry, for: rootURL)
+        }
 
-        let summaries = try await loadSummaries(from: fileURLs, rootURL: rootURL, registry: registry)
+        let summaries = registry == persistedRegistry
+            ? initialSummaries
+            : try await loadSummaries(from: fileURLs, rootURL: rootURL, registry: registry)
         var viewPreferences = try await metadataStore.loadViewPreferences(for: rootURL)
         if viewPreferences.savedBoardViews.isEmpty, let propertyKey = registry.defaultBoardPropertyKey {
             let defaultBoard = SavedBoardView(
@@ -37,7 +52,19 @@ final class WorkspaceRepository: @unchecked Sendable {
             )
             viewPreferences.savedBoardViews = [defaultBoard]
             viewPreferences.selectedBoardViewID = defaultBoard.id
-            try await metadataStore.saveViewPreferences(viewPreferences, for: rootURL)
+            try? await metadataStore.saveViewPreferences(viewPreferences, for: rootURL)
+        } else if viewPreferences.presentationMode == .board, viewPreferences.savedBoardViews.isEmpty {
+            viewPreferences.presentationMode = .list
+            viewPreferences.selectedBoardViewID = nil
+            try? await metadataStore.saveViewPreferences(viewPreferences, for: rootURL)
+        }
+        if let selectedBoardViewID = viewPreferences.selectedBoardViewID,
+           viewPreferences.savedBoardViews.contains(where: { $0.id == selectedBoardViewID }) == false {
+            viewPreferences.selectedBoardViewID = viewPreferences.savedBoardViews.first?.id
+            try? await metadataStore.saveViewPreferences(viewPreferences, for: rootURL)
+        } else if viewPreferences.selectedBoardViewID == nil, let firstBoardID = viewPreferences.savedBoardViews.first?.id {
+            viewPreferences.selectedBoardViewID = firstBoardID
+            try? await metadataStore.saveViewPreferences(viewPreferences, for: rootURL)
         }
         await searchIndex.rebuild(with: summaries)
 
@@ -56,6 +83,14 @@ final class WorkspaceRepository: @unchecked Sendable {
 
     func savePropertyRegistry(_ registry: PropertyRegistry, for rootURL: URL) async throws {
         try await metadataStore.savePropertyRegistry(registry, for: rootURL)
+    }
+
+    func saveMetadata(
+        registry: PropertyRegistry,
+        viewPreferences: WorkspaceViewPreferences,
+        for rootURL: URL
+    ) async throws {
+        try await metadataStore.saveMetadata(registry: registry, viewPreferences: viewPreferences, for: rootURL)
     }
 
     func search(query: String, rootURL: URL) async -> [SearchResult] {
@@ -89,12 +124,29 @@ final class WorkspaceRepository: @unchecked Sendable {
         return candidate
     }
 
+    func createFolder(in parentURL: URL, name: String) async throws -> URL {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedName.isEmpty == false else { return parentURL }
+
+        let sanitized = trimmedName.replacingOccurrences(of: "/", with: "-")
+        var candidate = parentURL.appendingPathComponent(sanitized, isDirectory: true)
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = parentURL.appendingPathComponent("\(sanitized) \(suffix)", isDirectory: true)
+            suffix += 1
+        }
+
+        try fileAccess.createDirectoryIfNeeded(at: candidate)
+        return candidate
+    }
+
     func renameNote(at url: URL, to newFilename: String) async throws -> URL {
         let sanitized = newFilename.trimmingCharacters(in: .whitespacesAndNewlines)
         guard sanitized.isEmpty == false else { return url }
         let stem = (sanitized as NSString).deletingPathExtension
         let destination = url.deletingLastPathComponent().appendingPathComponent(stem).appendingPathExtension(url.pathExtension)
         guard destination != url else { return url }
+        try ensureNoteDoesNotAlreadyExist(at: destination, excluding: url)
         try fileAccess.moveItem(at: url, to: destination)
         return destination
     }
@@ -102,6 +154,7 @@ final class WorkspaceRepository: @unchecked Sendable {
     func moveNote(at url: URL, to folderURL: URL) async throws -> URL {
         let destination = folderURL.appendingPathComponent(url.lastPathComponent)
         guard destination != url else { return url }
+        try ensureNoteDoesNotAlreadyExist(at: destination, excluding: url)
         try fileAccess.moveItem(at: url, to: destination)
         return destination
     }
@@ -125,6 +178,7 @@ final class WorkspaceRepository: @unchecked Sendable {
 
     private func merge(registry: PropertyRegistry, with summaries: [NoteSummary]) -> PropertyRegistry {
         var merged = registry
+        let persistedDefinitionKeys = Set(registry.definitions.keys)
 
         for summary in summaries {
             for (key, value) in summary.propertyValues where key != "title" {
@@ -149,6 +203,7 @@ final class WorkspaceRepository: @unchecked Sendable {
 
                     merged.definitions[key] = PropertyDefinition(key: key, kind: kind, options: options.sorted())
                 } else if case .string(let valueString) = value, merged.definitions[key]?.kind == .singleSelect {
+                    guard persistedDefinitionKeys.contains(key) == false else { continue }
                     if merged.definitions[key]?.options.contains(valueString) == false {
                         merged.definitions[key]?.options.append(valueString)
                         merged.definitions[key]?.options.sort()
@@ -162,6 +217,15 @@ final class WorkspaceRepository: @unchecked Sendable {
         }
 
         return merged
+    }
+
+    private func ensureNoteDoesNotAlreadyExist(at destination: URL, excluding source: URL) throws {
+        let normalizedDestination = destination.standardizedFileURL
+        let normalizedSource = source.standardizedFileURL
+        guard normalizedDestination != normalizedSource else { return }
+        guard FileManager.default.fileExists(atPath: normalizedDestination.path) == false else {
+            throw WorkspaceRepositoryError.noteAlreadyExists(normalizedDestination.lastPathComponent)
+        }
     }
 }
 

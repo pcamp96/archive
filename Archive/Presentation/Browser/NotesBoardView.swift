@@ -114,7 +114,7 @@ private struct BoardCardView: View {
     private var secondaryChipTitles: [String] {
         note.propertyValues
             .filter { key, value in
-                key != boardView.groupByProperty && value.stringValue.isEmpty == false
+                key != "title" && key != boardView.groupByProperty && value.stringValue.isEmpty == false
             }
             .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
             .prefix(2)

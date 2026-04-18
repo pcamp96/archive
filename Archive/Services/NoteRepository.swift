@@ -31,8 +31,6 @@ final class NoteRepository: @unchecked Sendable {
             fallbackURL: url
         )
 
-        let propertyMap = Dictionary(uniqueKeysWithValues: editableProperties.map { ($0.key, $0.value) })
-
         return NoteSummary(
             id: metadata.id,
             fileURL: url,
@@ -41,7 +39,7 @@ final class NoteRepository: @unchecked Sendable {
             bodyPreview: preview(from: parsed.body),
             createdAt: metadata.createdAt,
             modifiedAt: metadata.modifiedAt,
-            propertyValues: propertyMap
+            propertyValues: editableProperties.summaryPropertyMap()
         )
     }
 

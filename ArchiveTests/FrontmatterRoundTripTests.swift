@@ -60,4 +60,43 @@ struct FrontmatterRoundTripTests {
         #expect(output?.contains("status: Published") == true)
         #expect(output?.contains("config:\n  nested: true") == true)
     }
+
+    @Test
+    func codecHandlesDuplicateEditableKeysWithoutCrashing() {
+        let source = """
+        ---
+        title: Old
+        status: Draft
+        status: Published
+        ---
+
+        Body
+        """
+
+        let parsed = FrontmatterScanner().parse(source)
+        let registry = PropertyRegistry(definitions: [
+            "status": PropertyDefinition(key: "status", kind: .singleSelect, options: ["Draft", "Published", "Done"])
+        ])
+        let properties = parsed.frontmatter.editableProperties(using: registry)
+        let codec = FrontmatterCodec()
+        let output = codec.serializedFrontmatter(
+            from: parsed.frontmatter,
+            title: "Old",
+            properties: properties.map { property in
+                if property.key == "status", property.isReadOnly == false {
+                    return EditableProperty(
+                        key: property.key,
+                        kind: property.kind,
+                        value: .string("Done"),
+                        isReadOnly: false,
+                        issue: nil
+                    )
+                }
+                return property
+            }
+        )
+
+        #expect(output?.contains("status: Done") == true)
+        #expect(output?.contains("status: Published") == true)
+    }
 }

@@ -13,7 +13,7 @@ struct NoteDetailView: View {
                 .ignoresSafeArea()
 
             HStack {
-                Spacer(minLength: 28)
+                Spacer(minLength: 24)
                 EditorialNoteSurface(
                     title: titleBinding,
                     autosaveState: editorSession.autosaveState,
@@ -39,8 +39,8 @@ struct NoteDetailView: View {
                     },
                     conflictMessage: editorSession.conflictMessage
                 )
-                .frame(maxWidth: 940, maxHeight: .infinity)
-                Spacer(minLength: 28)
+                .frame(maxWidth: 940, maxHeight: .infinity, alignment: .topLeading)
+                Spacer(minLength: 24)
             }
             .padding(.vertical, 22)
         }

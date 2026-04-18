@@ -141,12 +141,8 @@ private struct PropertyEditorRow: View {
             .toggleStyle(.switch)
         case .singleSelect:
             Picker(property.key, selection: stringBinding) {
-                ForEach(definition?.options ?? [], id: \.self) { option in
+                ForEach(PropertyEditorOptions.singleSelectOptions(for: property, definition: definition), id: \.self) { option in
                     Text(option).tag(option)
-                }
-                if let currentValue = currentStringValue,
-                   definition?.options.contains(currentValue) == false {
-                    Text(currentValue).tag(currentValue)
                 }
             }
             .pickerStyle(.menu)
@@ -163,13 +159,6 @@ private struct PropertyEditorRow: View {
             Text(property.value.stringValue)
                 .foregroundStyle(.secondary)
         }
-    }
-
-    private var currentStringValue: String? {
-        if case .string(let value) = property.value {
-            return value
-        }
-        return nil
     }
 
     private var stringBinding: Binding<String> {
@@ -242,4 +231,18 @@ private struct PropertyEditorRow: View {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
+}
+
+enum PropertyEditorOptions {
+    static func singleSelectOptions(for property: EditableProperty, definition: PropertyDefinition?) -> [String] {
+        var options = definition?.options ?? []
+
+        if case .string(let currentValue) = property.value,
+           currentValue.isEmpty == false,
+           options.contains(currentValue) == false {
+            options.append(currentValue)
+        }
+
+        return options
+    }
 }

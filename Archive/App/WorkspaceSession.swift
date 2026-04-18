@@ -20,6 +20,7 @@ final class WorkspaceSession {
     var viewPreferences = WorkspaceViewPreferences()
     var isLoading = false
     var errorMessage: String?
+    private var noteOpenRequestNonce = 0
 
     init(
         rootURL: URL,
@@ -50,7 +51,8 @@ final class WorkspaceSession {
     var filteredNotes: [NoteSummary] {
         let baseNotes = notes.filter { note in
             guard let folder = browserState.selectedFolderURL else { return true }
-            return note.fileURL.path.hasPrefix(folder.path)
+            return note.fileURL.standardizedFileURL.path.hasPrefix(folder.standardizedFileURL.path + "/")
+                || note.fileURL.standardizedFileURL.deletingLastPathComponent() == folder.standardizedFileURL
         }
 
         let query = browserState.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -105,6 +107,10 @@ final class WorkspaceSession {
             viewPreferences = snapshot.viewPreferences
             browserState.presentationMode = viewPreferences.presentationMode
             browserState.selectedBoardViewID = viewPreferences.selectedBoardViewID ?? viewPreferences.savedBoardViews.first?.id
+            if let selectedFolderURL = browserState.selectedFolderURL,
+               folderTree?.containsFolder(at: selectedFolderURL) == false {
+                browserState.selectedFolderURL = rootURL
+            }
             if browserState.selectedFolderURL == nil {
                 browserState.selectedFolderURL = rootURL
             }
@@ -120,6 +126,9 @@ final class WorkspaceSession {
     }
 
     func openNote(_ summary: NoteSummary) {
+        noteOpenRequestNonce += 1
+        let openRequestNonce = noteOpenRequestNonce
+
         guard editorSession?.noteID != summary.id else {
             browserState.selectedNoteID = summary.id
             return
@@ -127,27 +136,45 @@ final class WorkspaceSession {
 
         Task {
             do {
-                if let editorSession, editorSession.isDirty {
-                    await flushActiveNote()
+                if let activeNoteID = editorSession?.noteID {
+                    guard await flushActiveEditorIfNeeded(
+                        matching: activeNoteID,
+                        fallbackMessage: "Save the current note before opening another note."
+                    ) else {
+                        return
+                    }
                 }
-                let document = try await noteRepository.loadDocument(at: summary.fileURL, relativeTo: rootURL, registry: propertyRegistry)
-                let editor = EditorSession(note: document, exportService: exportService)
+                guard noteOpenRequestNonce == openRequestNonce else { return }
                 browserState.selectedNoteID = summary.id
-                editorSession = editor
+                let document = try await noteRepository.loadDocument(at: summary.fileURL, relativeTo: rootURL, registry: propertyRegistry)
+                guard noteOpenRequestNonce == openRequestNonce, browserState.selectedNoteID == summary.id else { return }
+                editorSession = EditorSession(note: document, exportService: exportService)
             } catch {
+                guard noteOpenRequestNonce == openRequestNonce else { return }
                 errorMessage = error.localizedDescription
             }
         }
     }
 
-    func createNote() async {
+    func createNote(in folderURL: URL? = nil) async {
         do {
-            let targetFolder = browserState.selectedFolderURL ?? rootURL
+            let targetFolder = folderURL ?? browserState.selectedFolderURL ?? rootURL
             let createdURL = try await workspaceRepository.createNote(in: targetFolder, title: "Untitled")
             await refresh()
             if let summary = notes.first(where: { $0.fileURL == createdURL }) {
                 openNote(summary)
             }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func createFolder(named name: String, in parentURL: URL? = nil) async {
+        do {
+            let targetFolder = parentURL ?? browserState.selectedFolderURL ?? rootURL
+            let createdURL = try await workspaceRepository.createFolder(in: targetFolder, name: name)
+            browserState.selectedFolderURL = createdURL
+            await refresh()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -175,6 +202,28 @@ final class WorkspaceSession {
         }
     }
 
+    private func flushActiveEditorIfNeeded(matching noteID: NoteID, fallbackMessage: String) async -> Bool {
+        guard let editorSession, editorSession.noteID == noteID else { return true }
+        guard editorSession.isDirty else { return true }
+
+        await flushActiveNote()
+
+        guard let editorSession = self.editorSession, editorSession.noteID == noteID else { return true }
+        guard editorSession.isDirty == false else {
+            switch self.editorSession?.autosaveState {
+            case .conflict:
+                errorMessage = editorSession.conflictMessage ?? fallbackMessage
+            case .error(let message):
+                errorMessage = message
+            default:
+                errorMessage = fallbackMessage
+            }
+            return false
+        }
+
+        return true
+    }
+
     func autosaveIfNeeded(for session: EditorSession) async {
         guard editorSession?.noteID == session.noteID else { return }
         guard session.isDirty else { return }
@@ -200,38 +249,62 @@ final class WorkspaceSession {
         )
     }
 
-    func updatePresentationMode(_ mode: NotesPresentationMode) {
+    func updatePresentationMode(_ mode: NotesPresentationMode) async {
+        let previousBrowserMode = browserState.presentationMode
+        let previousViewPreferences = viewPreferences
         browserState.presentationMode = mode
         viewPreferences.presentationMode = mode
-        Task {
-            try? await workspaceRepository.saveViewPreferences(viewPreferences, for: rootURL)
+        do {
+            try await workspaceRepository.saveViewPreferences(viewPreferences, for: rootURL)
+        } catch {
+            browserState.presentationMode = previousBrowserMode
+            viewPreferences = previousViewPreferences
+            errorMessage = error.localizedDescription
         }
     }
 
-    func updateBoardSelection(_ id: UUID) {
+    func updateBoardSelection(_ id: UUID) async {
+        let previousBrowserSelection = browserState.selectedBoardViewID
+        let previousViewPreferences = viewPreferences
         browserState.selectedBoardViewID = id
         viewPreferences.selectedBoardViewID = id
-        Task {
-            try? await workspaceRepository.saveViewPreferences(viewPreferences, for: rootURL)
+        do {
+            try await workspaceRepository.saveViewPreferences(viewPreferences, for: rootURL)
+        } catch {
+            browserState.selectedBoardViewID = previousBrowserSelection
+            viewPreferences = previousViewPreferences
+            errorMessage = error.localizedDescription
         }
     }
 
     func moveNote(_ note: NoteSummary, toBoardValue value: String?) async {
         guard let key = activeBoardView?.groupByProperty else { return }
+        let kind = propertyRegistry.definition(for: key)?.kind ?? .singleSelect
+        let updatedProperty = EditableProperty(
+            key: key,
+            kind: kind,
+            value: .string(value ?? ""),
+            isReadOnly: false,
+            issue: nil
+        )
 
         do {
+            if let editorSession, editorSession.noteID == note.id {
+                editorSession.draft.upsertProperty(updatedProperty)
+                editorSession.markEdited()
+                guard await flushActiveEditorIfNeeded(
+                    matching: note.id,
+                    fallbackMessage: "Save the current note before updating its board column."
+                ) else {
+                    return
+                }
+                await refresh()
+                return
+            }
+
             let document = try await noteRepository.loadDocument(at: note.fileURL, relativeTo: rootURL, registry: propertyRegistry)
             var draft = NoteDraft(note: document)
-            let kind = propertyRegistry.definition(for: key)?.kind ?? .singleSelect
-            draft.upsertProperty(
-                EditableProperty(
-                    key: key,
-                    kind: kind,
-                    value: .string(value ?? ""),
-                    isReadOnly: false,
-                    issue: nil
-                )
-            )
+            draft.upsertProperty(updatedProperty)
             _ = try await noteRepository.saveDraft(draft, original: document, registry: propertyRegistry)
             await refresh()
         } catch {
@@ -240,11 +313,17 @@ final class WorkspaceSession {
     }
 
     func renameCurrentNote(to filename: String) async {
-        guard let currentNoteSummary else { return }
+        guard let noteID = currentNoteSummary?.id,
+              let currentNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
+        guard await flushActiveEditorIfNeeded(
+            matching: currentNoteSummary.id,
+            fallbackMessage: "Save the current note before renaming or moving it."
+        ) else { return }
+        guard let preparedNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
 
         do {
             let destination = try await workspaceRepository.renameNote(
-                at: currentNoteSummary.fileURL,
+                at: preparedNoteSummary.fileURL,
                 to: filename
             )
             await refresh()
@@ -257,11 +336,17 @@ final class WorkspaceSession {
     }
 
     func moveCurrentNote(to folderURL: URL) async {
-        guard let currentNoteSummary else { return }
+        guard let noteID = currentNoteSummary?.id,
+              let currentNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
+        guard await flushActiveEditorIfNeeded(
+            matching: currentNoteSummary.id,
+            fallbackMessage: "Save the current note before renaming or moving it."
+        ) else { return }
+        guard let preparedNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
 
         do {
             let destination = try await workspaceRepository.moveNote(
-                at: currentNoteSummary.fileURL,
+                at: preparedNoteSummary.fileURL,
                 to: folderURL
             )
             await refresh()
@@ -274,12 +359,22 @@ final class WorkspaceSession {
     }
 
     func deleteCurrentNote() async {
-        guard let currentNoteSummary else { return }
+        guard let noteID = currentNoteSummary?.id,
+              let currentNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
+        guard await flushActiveEditorIfNeeded(
+            matching: currentNoteSummary.id,
+            fallbackMessage: "Save the current note before deleting it."
+        ) else { return }
+        guard let preparedNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
 
         do {
-            try await workspaceRepository.deleteNote(at: currentNoteSummary.fileURL)
-            browserState.selectedNoteID = nil
-            editorSession = nil
+            try await workspaceRepository.deleteNote(at: preparedNoteSummary.fileURL)
+            if browserState.selectedNoteID == noteID {
+                browserState.selectedNoteID = nil
+            }
+            if editorSession?.noteID == noteID {
+                editorSession = nil
+            }
             await refresh()
         } catch {
             errorMessage = error.localizedDescription
@@ -310,7 +405,35 @@ final class WorkspaceSession {
             editorSession.markEdited()
         }
 
-        ensureBoardViewExists(for: definition)
+        await ensureBoardViewExists(for: definition)
+    }
+
+    func updatePropertyDefinitionOptions(for key: String, options: [String]) async {
+        guard var definition = propertyRegistry.definitions[key] else { return }
+
+        let normalizedOptions = normalizedUniqueOptions(from: options)
+        var updatedRegistry = propertyRegistry
+        var updatedViewPreferences = viewPreferences
+
+        definition.options = normalizedOptions
+        updatedRegistry.definitions[key] = definition
+
+        for index in updatedViewPreferences.savedBoardViews.indices where updatedViewPreferences.savedBoardViews[index].groupByProperty == key {
+            updatedViewPreferences.savedBoardViews[index].laneOrder = normalizedOptions
+        }
+
+        do {
+            try await workspaceRepository.saveMetadata(
+                registry: updatedRegistry,
+                viewPreferences: updatedViewPreferences,
+                for: rootURL
+            )
+            propertyRegistry = updatedRegistry
+            viewPreferences = updatedViewPreferences
+            await refresh()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func createDefaultWorkflowProperty() async {
@@ -333,10 +456,12 @@ final class WorkspaceSession {
         }
     }
 
-    private func ensureBoardViewExists(for definition: PropertyDefinition) {
+    private func ensureBoardViewExists(for definition: PropertyDefinition) async {
         guard definition.isBoardEligible else { return }
         guard viewPreferences.savedBoardViews.contains(where: { $0.groupByProperty == definition.key }) == false else { return }
 
+        let previousViewPreferences = viewPreferences
+        let previousSelectedBoardID = browserState.selectedBoardViewID
         let boardView = SavedBoardView(
             name: "\(definition.key.capitalized) Board",
             groupByProperty: definition.key,
@@ -347,14 +472,32 @@ final class WorkspaceSession {
             viewPreferences.selectedBoardViewID = boardView.id
             browserState.selectedBoardViewID = boardView.id
         }
-        Task {
-            try? await workspaceRepository.saveViewPreferences(viewPreferences, for: rootURL)
+        do {
+            try await workspaceRepository.saveViewPreferences(viewPreferences, for: rootURL)
+        } catch {
+            viewPreferences = previousViewPreferences
+            browserState.selectedBoardViewID = previousSelectedBoardID
+            errorMessage = error.localizedDescription
         }
+    }
+
+    private func normalizedUniqueOptions(from options: [String]) -> [String] {
+        var seen = Set<String>()
+        var normalized: [String] = []
+
+        for option in options {
+            let trimmed = option.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false else { continue }
+            guard seen.insert(trimmed).inserted else { continue }
+            normalized.append(trimmed)
+        }
+
+        return normalized
     }
 
     private func replaceLocalNote(with document: NoteDocument) {
         let summary = NoteSummary(document: document)
-        if let index = notes.firstIndex(where: { $0.id == summary.id }) {
+        if let index = notes.firstIndex(where: { $0.fileURL.standardizedFileURL == summary.fileURL.standardizedFileURL || $0.id == summary.id }) {
             notes[index] = summary
         } else {
             notes.append(summary)
