@@ -28,7 +28,7 @@ struct WorkspaceRepositoryTests {
         let second = try await repository.createNote(in: root, title: "Untitled")
 
         #expect(first.lastPathComponent == "Untitled.md")
-        #expect(second.lastPathComponent == "Untitled 2.md")
+        #expect(second.lastPathComponent == "Untitled-2.md")
         #expect(FileManager.default.fileExists(atPath: first.path))
         #expect(FileManager.default.fileExists(atPath: second.path))
 
@@ -36,6 +36,19 @@ struct WorkspaceRepositoryTests {
         let secondContents = try String(contentsOf: second)
         #expect(firstContents.contains("title: Untitled"))
         #expect(secondContents.contains("title: Untitled"))
+    }
+
+    @Test
+    func createNotePreservesDisplayTitleWhileEscapingFilenameSpaces() async throws {
+        let repository = makeRepository()
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let noteURL = try await repository.createNote(in: root, title: "Ship Log")
+        let contents = try String(contentsOf: noteURL)
+
+        #expect(noteURL.lastPathComponent == "Ship-Log.md")
+        #expect(contents.contains("title: Ship Log"))
     }
 
     @Test
@@ -71,7 +84,7 @@ struct WorkspaceRepositoryTests {
 
         let renamedURL = try await repository.renameNote(at: originalURL, to: "Release/Notes v0.0.1.md")
 
-        #expect(renamedURL.lastPathComponent == "Release-Notes v0.0.1.md")
+        #expect(renamedURL.lastPathComponent == "Release-Notes-v0.0.1.md")
         #expect(FileManager.default.fileExists(atPath: renamedURL.path))
         #expect(FileManager.default.fileExists(atPath: originalURL.path) == false)
     }
@@ -89,9 +102,9 @@ struct WorkspaceRepositoryTests {
         let directoryContents = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
         let filenames = directoryContents.map(\.lastPathComponent)
 
-        #expect(renamedURL.lastPathComponent == "ship log.md")
+        #expect(renamedURL.lastPathComponent == "ship-log.md")
         #expect(FileManager.default.fileExists(atPath: renamedURL.path))
-        #expect(filenames == ["ship log.md"])
+        #expect(filenames == ["ship-log.md"])
     }
 
     @Test

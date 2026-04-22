@@ -11,6 +11,7 @@ struct WorkspaceSplitView: View {
         } detail: {
             if let editorSession = session.editorSession {
                 NoteDetailView(workspaceSession: session, editorSession: editorSession)
+                    .id(editorSession.noteID.resourceIdentifier)
             } else {
                 EmptyStateView(
                     title: "Select a Note",
@@ -29,4 +30,3 @@ struct WorkspaceSplitView: View {
         }
     }
 }
-

@@ -102,18 +102,19 @@ final class WorkspaceRepository: @unchecked Sendable {
     }
 
     func createNote(in folderURL: URL, title: String) async throws -> URL {
-        let baseStem = normalizedNoteStem(from: title) ?? "Untitled"
+        let displayTitle = normalizedDisplayTitle(from: title) ?? "Untitled"
+        let baseStem = normalizedFilenameStem(from: displayTitle) ?? "Untitled"
 
         var candidate = folderURL.appendingPathComponent("\(baseStem).md")
         var suffix = 2
         while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = folderURL.appendingPathComponent("\(baseStem) \(suffix).md")
+            candidate = folderURL.appendingPathComponent("\(baseStem)-\(suffix).md")
             suffix += 1
         }
 
         let contents = """
         ---
-        title: \(baseStem)
+        title: \(displayTitle)
         ---
 
         """
@@ -138,7 +139,7 @@ final class WorkspaceRepository: @unchecked Sendable {
     }
 
     func renameNote(at url: URL, to newFilename: String) async throws -> URL {
-        guard let stem = normalizedNoteStem(from: newFilename) else { return url }
+        guard let stem = normalizedFilenameStem(from: newFilename) else { return url }
         let destination = url.deletingLastPathComponent().appendingPathComponent(stem).appendingPathExtension(url.pathExtension)
         guard destination != url else { return url }
         if try refersToSameFile(url, and: destination) {
@@ -248,11 +249,16 @@ final class WorkspaceRepository: @unchecked Sendable {
         }
     }
 
-    private func normalizedNoteStem(from value: String) -> String? {
+    private func normalizedDisplayTitle(from value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else { return nil }
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
-        let sanitized = trimmed
+    private func normalizedFilenameStem(from value: String) -> String? {
+        guard let displayTitle = normalizedDisplayTitle(from: value) else { return nil }
+
+        let sanitized = displayTitle
+            .replacingOccurrences(of: "\\s+", with: "-", options: .regularExpression)
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
         let stem: String
@@ -262,7 +268,7 @@ final class WorkspaceRepository: @unchecked Sendable {
             stem = sanitized
         }
 
-        let normalized = stem.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = stem.trimmingCharacters(in: CharacterSet(charactersIn: "- ").union(.whitespacesAndNewlines))
         return normalized.isEmpty ? nil : normalized
     }
 }

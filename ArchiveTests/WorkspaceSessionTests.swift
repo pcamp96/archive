@@ -305,8 +305,9 @@ struct WorkspaceSessionTests {
         session.editorSession = editorSession
 
         await session.createNote()
+        await session.waitForPendingBackgroundRenames()
 
-        let updatedOriginalURL = root.appendingPathComponent("Draft Updated.md")
+        let updatedOriginalURL = root.appendingPathComponent("Draft-Updated.md")
         let newNoteURL = root.appendingPathComponent("Untitled.md")
 
         #expect(FileManager.default.fileExists(atPath: updatedOriginalURL.path))
@@ -322,6 +323,115 @@ struct WorkspaceSessionTests {
 
         #expect(session.editorSession?.originalNote.fileURL == newNoteURL)
         #expect(session.editorSession?.draft.title == "Untitled")
+    }
+
+    @Test
+    func createSecondUntitledNotePreservesFirstUntitledDraft() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let originalURL = root.appendingPathComponent("Untitled.md")
+        try Data(
+            """
+            ---
+            title: Untitled
+            ---
+
+            Original body
+            """.utf8
+        ).write(to: originalURL, options: .atomic)
+
+        let dependencies = makeDependencies()
+        let session = makeSession(
+            root: root,
+            workspaceRepository: dependencies.workspaceRepository,
+            noteRepository: dependencies.noteRepository,
+            defaults: dependencies.defaults
+        )
+        defer {
+            dependencies.defaults.removePersistentDomain(forName: dependencies.suiteName)
+        }
+
+        await session.refresh()
+        let document = try await dependencies.noteRepository.loadDocument(
+            at: originalURL,
+            relativeTo: root,
+            registry: session.propertyRegistry
+        )
+        let editorSession = EditorSession(note: document, exportService: ExportService(renderer: MarkdownHTMLRenderer()))
+        editorSession.draft.body = "Edited before creating the next untitled note"
+        editorSession.markEdited()
+
+        session.browserState.selectedNoteID = document.id
+        session.editorSession = editorSession
+
+        await session.createNote()
+        await session.waitForPendingBackgroundRenames()
+
+        let secondUntitledURL = root.appendingPathComponent("Untitled-2.md")
+        let savedOriginalDocument = try await dependencies.noteRepository.loadDocument(
+            at: originalURL,
+            relativeTo: root,
+            registry: session.propertyRegistry
+        )
+
+        #expect(FileManager.default.fileExists(atPath: originalURL.path))
+        #expect(FileManager.default.fileExists(atPath: secondUntitledURL.path))
+        #expect(savedOriginalDocument.body == "Edited before creating the next untitled note")
+        #expect(session.editorSession?.originalNote.fileURL == secondUntitledURL)
+        #expect(session.editorSession?.draft.title == "Untitled")
+    }
+
+    @Test
+    func createNoteWaitsForPendingRenameBeforeAllocatingNextUntitledFilename() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let originalURL = root.appendingPathComponent("Untitled.md")
+        try Data(
+            """
+            ---
+            title: Untitled
+            ---
+
+            Original body
+            """.utf8
+        ).write(to: originalURL, options: .atomic)
+
+        let dependencies = makeDependencies()
+        let session = makeSession(
+            root: root,
+            workspaceRepository: dependencies.workspaceRepository,
+            noteRepository: dependencies.noteRepository,
+            defaults: dependencies.defaults
+        )
+        defer {
+            dependencies.defaults.removePersistentDomain(forName: dependencies.suiteName)
+        }
+
+        await session.refresh()
+        let document = try await dependencies.noteRepository.loadDocument(
+            at: originalURL,
+            relativeTo: root,
+            registry: session.propertyRegistry
+        )
+        let editorSession = EditorSession(note: document, exportService: ExportService(renderer: MarkdownHTMLRenderer()))
+        editorSession.draft.title = "Project Plan"
+        editorSession.markEdited()
+
+        session.browserState.selectedNoteID = document.id
+        session.editorSession = editorSession
+
+        await session.createNote()
+        await session.waitForPendingBackgroundRenames()
+
+        let renamedOriginalURL = root.appendingPathComponent("Project-Plan.md")
+        let newNoteURL = root.appendingPathComponent("Untitled.md")
+
+        #expect(FileManager.default.fileExists(atPath: renamedOriginalURL.path))
+        #expect(FileManager.default.fileExists(atPath: newNoteURL.path))
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("Untitled-2.md").path) == false)
+        #expect(session.editorSession?.originalNote.fileURL == newNoteURL)
     }
 
     @Test
@@ -366,8 +476,9 @@ struct WorkspaceSessionTests {
         session.editorSession = editorSession
 
         await session.flushActiveNote()
+        await session.waitForPendingBackgroundRenames()
 
-        let renamedURL = root.appendingPathComponent("Ship Log.md")
+        let renamedURL = root.appendingPathComponent("Ship-Log.md")
         #expect(FileManager.default.fileExists(atPath: renamedURL.path))
         #expect(FileManager.default.fileExists(atPath: originalURL.path) == false)
         #expect(session.notes.count == 1)
@@ -391,7 +502,7 @@ struct WorkspaceSessionTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let originalURL = root.appendingPathComponent("Untitled.md")
-        let existingURL = root.appendingPathComponent("Ship Log.md")
+        let existingURL = root.appendingPathComponent("Ship-Log.md")
         try Data(
             """
             ---
@@ -437,6 +548,7 @@ struct WorkspaceSessionTests {
         session.editorSession = editorSession
 
         await session.flushActiveNote()
+        await session.waitForPendingBackgroundRenames()
 
         let persistedOriginal = try await dependencies.noteRepository.loadDocument(
             at: originalURL,
@@ -450,12 +562,67 @@ struct WorkspaceSessionTests {
         )
 
         #expect(FileManager.default.fileExists(atPath: originalURL.path))
-        #expect(session.errorMessage == "A note named \"Ship Log.md\" already exists in that location.")
+        #expect(session.errorMessage == "A note named \"Ship-Log.md\" already exists in that location.")
         #expect(persistedOriginal.title == "Ship Log")
         #expect(persistedOriginal.body == "Updated body")
         #expect(untouchedExisting.body == "Existing body")
         #expect(session.editorSession?.originalNote.fileURL == originalURL)
         #expect(session.editorSession?.autosaveState == .saved)
+    }
+
+    @Test
+    func flushActiveNotePreservesDisplayTitleWhileEscapingFilenameSpaces() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let originalURL = root.appendingPathComponent("Untitled.md")
+        try Data(
+            """
+            ---
+            title: Untitled
+            ---
+
+            Original body
+            """.utf8
+        ).write(to: originalURL, options: .atomic)
+
+        let dependencies = makeDependencies()
+        let session = makeSession(
+            root: root,
+            workspaceRepository: dependencies.workspaceRepository,
+            noteRepository: dependencies.noteRepository,
+            defaults: dependencies.defaults
+        )
+        defer {
+            dependencies.defaults.removePersistentDomain(forName: dependencies.suiteName)
+        }
+
+        let document = try await dependencies.noteRepository.loadDocument(
+            at: originalURL,
+            relativeTo: root,
+            registry: session.propertyRegistry
+        )
+        let editorSession = EditorSession(note: document, exportService: ExportService(renderer: MarkdownHTMLRenderer()))
+        editorSession.draft.title = "Ship Log"
+        editorSession.markEdited()
+
+        session.notes = [NoteSummary(document: document)]
+        session.browserState.selectedNoteID = document.id
+        session.editorSession = editorSession
+
+        await session.flushActiveNote()
+        await session.waitForPendingBackgroundRenames()
+
+        let renamedURL = root.appendingPathComponent("Ship-Log.md")
+        let renamedDocument = try await dependencies.noteRepository.loadDocument(
+            at: renamedURL,
+            relativeTo: root,
+            registry: session.propertyRegistry
+        )
+
+        #expect(renamedDocument.title == "Ship Log")
+        #expect(session.editorSession?.draft.title == "Ship Log")
+        #expect(session.editorSession?.originalNote.fileURL == renamedURL)
     }
 
     @Test
@@ -511,6 +678,59 @@ struct WorkspaceSessionTests {
         #expect(session.errorMessage == nil)
         #expect(persistedDocument.title == "From Body Heading")
         #expect(persistedDocument.body == "# From Body Heading\n\nUpdated body")
+    }
+
+    @Test
+    func blankTitleSaveCancelsPendingBackgroundRename() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let originalURL = root.appendingPathComponent("Untitled.md")
+        try Data(
+            """
+            ---
+            title: Untitled
+            ---
+
+            Original body
+            """.utf8
+        ).write(to: originalURL, options: .atomic)
+
+        let dependencies = makeDependencies()
+        let session = makeSession(
+            root: root,
+            workspaceRepository: dependencies.workspaceRepository,
+            noteRepository: dependencies.noteRepository,
+            defaults: dependencies.defaults
+        )
+        defer {
+            dependencies.defaults.removePersistentDomain(forName: dependencies.suiteName)
+        }
+
+        let document = try await dependencies.noteRepository.loadDocument(
+            at: originalURL,
+            relativeTo: root,
+            registry: session.propertyRegistry
+        )
+        let editorSession = EditorSession(note: document, exportService: ExportService(renderer: MarkdownHTMLRenderer()))
+        editorSession.draft.title = "Ship Log"
+        editorSession.markEdited()
+
+        session.notes = [NoteSummary(document: document)]
+        session.browserState.selectedNoteID = document.id
+        session.editorSession = editorSession
+
+        await session.flushActiveNote()
+
+        editorSession.draft.title = "   "
+        editorSession.draft.body = "# Untitled\n\nOriginal body"
+        editorSession.markEdited()
+
+        await session.flushActiveNote()
+        await session.waitForPendingBackgroundRenames()
+
+        #expect(FileManager.default.fileExists(atPath: originalURL.path))
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("Ship-Log.md").path) == false)
     }
 
     @Test

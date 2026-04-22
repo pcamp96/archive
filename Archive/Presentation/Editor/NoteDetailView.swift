@@ -7,6 +7,11 @@ struct NoteDetailView: View {
 
     @State private var isShowingPropertySheet = false
 
+    private struct AutosaveTaskID: Hashable {
+        let noteID: NoteID
+        let nonce: Int
+    }
+
     var body: some View {
         ZStack {
             Color(nsColor: .windowBackgroundColor)
@@ -84,7 +89,7 @@ struct NoteDetailView: View {
                 }
             }
         }
-        .task(id: editorSession.autosaveNonce) {
+        .task(id: AutosaveTaskID(noteID: editorSession.noteID, nonce: editorSession.autosaveNonce)) {
             await workspaceSession.autosaveIfNeeded(for: editorSession)
         }
         .sheet(isPresented: $isShowingPropertySheet) {
