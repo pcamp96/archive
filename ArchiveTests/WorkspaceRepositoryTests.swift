@@ -19,6 +19,26 @@ struct WorkspaceRepositoryTests {
     }
 
     @Test
+    func createNoteCreatesFirstNoteAndSuffixesSecondOne() async throws {
+        let repository = makeRepository()
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let first = try await repository.createNote(in: root, title: "Untitled")
+        let second = try await repository.createNote(in: root, title: "Untitled")
+
+        #expect(first.lastPathComponent == "Untitled.md")
+        #expect(second.lastPathComponent == "Untitled 2.md")
+        #expect(FileManager.default.fileExists(atPath: first.path))
+        #expect(FileManager.default.fileExists(atPath: second.path))
+
+        let firstContents = try String(contentsOf: first)
+        let secondContents = try String(contentsOf: second)
+        #expect(firstContents.contains("title: Untitled"))
+        #expect(secondContents.contains("title: Untitled"))
+    }
+
+    @Test
     func renameNoteDoesNotOverwriteExistingDestination() async throws {
         let repository = makeRepository()
         let root = try makeTemporaryRoot()
@@ -38,6 +58,40 @@ struct WorkspaceRepositoryTests {
 
         let existingContents = try String(contentsOf: existingURL)
         #expect(existingContents == "Existing")
+    }
+
+    @Test
+    func renameNoteSanitizesSeparatorsAndPreservesDotsInTitles() async throws {
+        let repository = makeRepository()
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let originalURL = root.appendingPathComponent("Original.md")
+        try makeMarkdownNote(at: originalURL, contents: "Original")
+
+        let renamedURL = try await repository.renameNote(at: originalURL, to: "Release/Notes v0.0.1.md")
+
+        #expect(renamedURL.lastPathComponent == "Release-Notes v0.0.1.md")
+        #expect(FileManager.default.fileExists(atPath: renamedURL.path))
+        #expect(FileManager.default.fileExists(atPath: originalURL.path) == false)
+    }
+
+    @Test
+    func renameNoteAllowsCaseOnlyFilenameChanges() async throws {
+        let repository = makeRepository()
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let originalURL = root.appendingPathComponent("Ship Log.md")
+        try makeMarkdownNote(at: originalURL, contents: "Original")
+
+        let renamedURL = try await repository.renameNote(at: originalURL, to: "ship log")
+        let directoryContents = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        let filenames = directoryContents.map(\.lastPathComponent)
+
+        #expect(renamedURL.lastPathComponent == "ship log.md")
+        #expect(FileManager.default.fileExists(atPath: renamedURL.path))
+        #expect(filenames == ["ship log.md"])
     }
 
     @Test

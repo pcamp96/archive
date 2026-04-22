@@ -32,19 +32,19 @@ struct NotesListView: View {
                 .tag(note.id)
             }
         }
-        .onChange(of: session.browserState.selectedNoteID) { _, noteID in
-            guard let noteID,
-                  let summary = session.filteredNotes.first(where: { $0.id == noteID }) ?? session.notes.first(where: { $0.id == noteID }) else {
-                return
-            }
-            session.openNote(summary)
-        }
     }
 
     private var selectedNoteBinding: Binding<NoteID?> {
         Binding(
             get: { session.browserState.selectedNoteID },
-            set: { session.browserState.selectedNoteID = $0 }
+            set: { noteID in
+                session.browserState.selectedNoteID = noteID
+                guard let noteID,
+                      let summary = session.filteredNotes.first(where: { $0.id == noteID }) ?? session.notes.first(where: { $0.id == noteID }) else {
+                    return
+                }
+                session.openNote(summary)
+            }
         )
     }
 }

@@ -129,41 +129,30 @@ final class WorkspaceSession {
         noteOpenRequestNonce += 1
         let openRequestNonce = noteOpenRequestNonce
 
-        guard editorSession?.noteID != summary.id else {
-            browserState.selectedNoteID = summary.id
-            return
-        }
-
         Task {
-            do {
-                if let activeNoteID = editorSession?.noteID {
-                    guard await flushActiveEditorIfNeeded(
-                        matching: activeNoteID,
-                        fallbackMessage: "Save the current note before opening another note."
-                    ) else {
-                        return
-                    }
-                }
-                guard noteOpenRequestNonce == openRequestNonce else { return }
-                browserState.selectedNoteID = summary.id
-                let document = try await noteRepository.loadDocument(at: summary.fileURL, relativeTo: rootURL, registry: propertyRegistry)
-                guard noteOpenRequestNonce == openRequestNonce, browserState.selectedNoteID == summary.id else { return }
-                editorSession = EditorSession(note: document, exportService: exportService)
-            } catch {
-                guard noteOpenRequestNonce == openRequestNonce else { return }
-                errorMessage = error.localizedDescription
-            }
+            await openNote(summary, requestNonce: openRequestNonce)
         }
     }
 
     func createNote(in folderURL: URL? = nil) async {
         do {
+            if let activeNoteID = editorSession?.noteID {
+                guard await flushActiveEditorIfNeeded(
+                    matching: activeNoteID,
+                    fallbackMessage: "Save the current note before creating another one."
+                ) else {
+                    return
+                }
+            }
             let targetFolder = folderURL ?? browserState.selectedFolderURL ?? rootURL
             let createdURL = try await workspaceRepository.createNote(in: targetFolder, title: "Untitled")
+            noteOpenRequestNonce += 1
+            let openRequestNonce = noteOpenRequestNonce
+            let document = try await noteRepository.loadDocument(at: createdURL, relativeTo: rootURL, registry: propertyRegistry)
             await refresh()
-            if let summary = notes.first(where: { $0.fileURL == createdURL }) {
-                openNote(summary)
-            }
+            guard noteOpenRequestNonce == openRequestNonce else { return }
+            browserState.selectedNoteID = document.id
+            editorSession = EditorSession(note: document, exportService: exportService)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -188,11 +177,25 @@ final class WorkspaceSession {
         guard let editorSession else { return }
         guard editorSession.isDirty else { return }
         editorSession.autosaveState = .saving
+        let draftToSave = editorSession.draft
+        let noteID = editorSession.noteID
+        let originalFileURL = editorSession.originalNote.fileURL
 
         do {
-            let savedDocument = try await noteRepository.saveDraft(editorSession.draft, original: editorSession.originalNote, registry: propertyRegistry)
-            editorSession.applySavedDocument(savedDocument)
-            replaceLocalNote(with: savedDocument)
+            var persistedDocument = try await noteRepository.saveDraft(draftToSave, original: editorSession.originalNote, registry: propertyRegistry)
+            do {
+                persistedDocument = try await autoRenameDocumentIfNeeded(persistedDocument, explicitTitle: draftToSave.title)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+
+            guard let currentEditorSession = self.editorSession, currentEditorSession.noteID == noteID else {
+                replaceLocalNote(with: persistedDocument, replacingNoteID: noteID, replacingFileURL: originalFileURL)
+                return
+            }
+
+            currentEditorSession.reconcileSavedDocument(persistedDocument, expectedSavedDraft: draftToSave)
+            replaceLocalNote(with: persistedDocument, replacingNoteID: noteID, replacingFileURL: originalFileURL)
         } catch let NoteRepositoryError.versionConflict(message) {
             editorSession.conflictMessage = message
             editorSession.autosaveState = .conflict
@@ -200,6 +203,49 @@ final class WorkspaceSession {
             errorMessage = error.localizedDescription
             editorSession.autosaveState = .error(error.localizedDescription)
         }
+    }
+
+    private func openNote(_ summary: NoteSummary, requestNonce: Int) async {
+        do {
+            guard noteOpenRequestNonce == requestNonce else { return }
+
+            if let currentEditorSession = editorSession, currentEditorSession.noteID == summary.id {
+                browserState.selectedNoteID = summary.id
+                return
+            }
+
+            if let activeNoteID = editorSession?.noteID {
+                guard await flushActiveEditorIfNeeded(
+                    matching: activeNoteID,
+                    fallbackMessage: "Save the current note before opening another note."
+                ) else {
+                    return
+                }
+            }
+
+            guard noteOpenRequestNonce == requestNonce else { return }
+            browserState.selectedNoteID = summary.id
+            let document = try await noteRepository.loadDocument(at: summary.fileURL, relativeTo: rootURL, registry: propertyRegistry)
+            guard noteOpenRequestNonce == requestNonce, browserState.selectedNoteID == summary.id else { return }
+            editorSession = EditorSession(note: document, exportService: exportService)
+        } catch {
+            guard noteOpenRequestNonce == requestNonce else { return }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func autoRenameDocumentIfNeeded(_ document: NoteDocument, explicitTitle: String) async throws -> NoteDocument {
+        let desiredFilename = explicitTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard desiredFilename.isEmpty == false else { return document }
+
+        let currentStem = document.fileURL.deletingPathExtension().lastPathComponent
+        let desiredStem = (desiredFilename as NSString).deletingPathExtension
+        guard desiredStem.isEmpty == false, desiredStem != currentStem else {
+            return document
+        }
+
+        let destination = try await workspaceRepository.renameNote(at: document.fileURL, to: desiredFilename)
+        return try await noteRepository.loadDocument(at: destination, relativeTo: rootURL, registry: propertyRegistry)
     }
 
     private func flushActiveEditorIfNeeded(matching noteID: NoteID, fallbackMessage: String) async -> Bool {
@@ -495,12 +541,24 @@ final class WorkspaceSession {
         return normalized
     }
 
-    private func replaceLocalNote(with document: NoteDocument) {
+    private func replaceLocalNote(with document: NoteDocument, replacingNoteID: NoteID? = nil, replacingFileURL: URL? = nil) {
         let summary = NoteSummary(document: document)
-        if let index = notes.firstIndex(where: { $0.fileURL.standardizedFileURL == summary.fileURL.standardizedFileURL || $0.id == summary.id }) {
+        let normalizedReplacingFileURL = replacingFileURL?.standardizedFileURL
+        if let index = notes.firstIndex(where: {
+            $0.fileURL.standardizedFileURL == summary.fileURL.standardizedFileURL
+                || $0.id == summary.id
+                || (replacingNoteID != nil && $0.id == replacingNoteID)
+                || (normalizedReplacingFileURL != nil && $0.fileURL.standardizedFileURL == normalizedReplacingFileURL)
+        }) {
             notes[index] = summary
         } else {
             notes.append(summary)
+        }
+        notes.removeAll { existing in
+            existing.id != summary.id
+                && existing.fileURL.standardizedFileURL != summary.fileURL.standardizedFileURL
+                && ((replacingNoteID != nil && existing.id == replacingNoteID)
+                    || (normalizedReplacingFileURL != nil && existing.fileURL.standardizedFileURL == normalizedReplacingFileURL))
         }
         notes.sort(using: KeyPathComparator(\.modifiedAt, order: .reverse))
         browserState.selectedNoteID = summary.id
@@ -549,7 +607,6 @@ enum AutosaveState: Equatable {
 @Observable
 final class EditorSession {
     var originalNote: NoteDocument
-    let noteID: NoteID
     private let exportService: ExportService
 
     var draft: NoteDraft
@@ -560,9 +617,12 @@ final class EditorSession {
     var displayModeOverride: MarkdownDisplayMode?
     private var lastSavedDraft: NoteDraft
 
+    var noteID: NoteID {
+        originalNote.id
+    }
+
     init(note: NoteDocument, exportService: ExportService) {
         self.originalNote = note
-        self.noteID = note.id
         self.exportService = exportService
         self.draft = NoteDraft(note: note)
         self.lastSavedDraft = NoteDraft(note: note)
@@ -583,6 +643,26 @@ final class EditorSession {
         draft = NoteDraft(note: document)
         lastSavedDraft = draft
         autosaveState = .saved
+        conflictMessage = nil
+    }
+
+    func reconcileSavedDocument(_ document: NoteDocument, expectedSavedDraft: NoteDraft) {
+        let currentDraft = draft
+        originalNote = document
+
+        if currentDraft == expectedSavedDraft {
+            applySavedDocument(document)
+            return
+        }
+
+        var rebasedDraft = NoteDraft(note: document)
+        rebasedDraft.title = currentDraft.title
+        rebasedDraft.properties = currentDraft.properties
+        rebasedDraft.body = currentDraft.body
+
+        draft = rebasedDraft
+        lastSavedDraft = NoteDraft(note: document)
+        autosaveState = .dirty
         conflictMessage = nil
     }
 

@@ -102,10 +102,7 @@ final class WorkspaceRepository: @unchecked Sendable {
     }
 
     func createNote(in folderURL: URL, title: String) async throws -> URL {
-        let sanitizedStem = title
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "/", with: "-")
-        let baseStem = sanitizedStem.isEmpty ? "Untitled" : sanitizedStem
+        let baseStem = normalizedNoteStem(from: title) ?? "Untitled"
 
         var candidate = folderURL.appendingPathComponent("\(baseStem).md")
         var suffix = 2
@@ -141,11 +138,13 @@ final class WorkspaceRepository: @unchecked Sendable {
     }
 
     func renameNote(at url: URL, to newFilename: String) async throws -> URL {
-        let sanitized = newFilename.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard sanitized.isEmpty == false else { return url }
-        let stem = (sanitized as NSString).deletingPathExtension
+        guard let stem = normalizedNoteStem(from: newFilename) else { return url }
         let destination = url.deletingLastPathComponent().appendingPathComponent(stem).appendingPathExtension(url.pathExtension)
         guard destination != url else { return url }
+        if try refersToSameFile(url, and: destination) {
+            try renameCaseOnlyNote(at: url, to: destination)
+            return destination
+        }
         try ensureNoteDoesNotAlreadyExist(at: destination, excluding: url)
         try fileAccess.moveItem(at: url, to: destination)
         return destination
@@ -226,6 +225,45 @@ final class WorkspaceRepository: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: normalizedDestination.path) == false else {
             throw WorkspaceRepositoryError.noteAlreadyExists(normalizedDestination.lastPathComponent)
         }
+    }
+
+    private func refersToSameFile(_ source: URL, and destination: URL) throws -> Bool {
+        guard FileManager.default.fileExists(atPath: destination.path) else { return false }
+        let sourceMetadata = try fileAccess.metadata(for: source)
+        let destinationMetadata = try fileAccess.metadata(for: destination)
+        return sourceMetadata.id.resourceIdentifier == destinationMetadata.id.resourceIdentifier
+    }
+
+    private func renameCaseOnlyNote(at source: URL, to destination: URL) throws {
+        let tempURL = source
+            .deletingLastPathComponent()
+            .appendingPathComponent(".archive-rename-\(UUID().uuidString)")
+            .appendingPathExtension(source.pathExtension)
+        try fileAccess.moveItem(at: source, to: tempURL)
+        do {
+            try fileAccess.moveItem(at: tempURL, to: destination)
+        } catch {
+            try? fileAccess.moveItem(at: tempURL, to: source)
+            throw error
+        }
+    }
+
+    private func normalizedNoteStem(from value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+
+        let sanitized = trimmed
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        let stem: String
+        if sanitized.lowercased().hasSuffix(".md") {
+            stem = String(sanitized.dropLast(3))
+        } else {
+            stem = sanitized
+        }
+
+        let normalized = stem.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : normalized
     }
 }
 
