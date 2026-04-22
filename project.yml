@@ -32,6 +32,9 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 7YRDJ7AV9J
         ENABLE_APP_SANDBOX: NO
+      configs:
+        Release:
+          ENABLE_HARDENED_RUNTIME: YES
     dependencies:
       - package: Markdown
         product: Markdown
