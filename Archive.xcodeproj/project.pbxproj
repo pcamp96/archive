@@ -24,6 +24,7 @@
 		39F693FEFF74FC95EB50542D /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7833F83F27CA48D6FAC13E57 /* SettingsView.swift */; };
 		3A76FAF17FFEA7B65933B6FF /* WorkspaceMetadataStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4379D63756C650A2409C599F /* WorkspaceMetadataStoreTests.swift */; };
 		3B369E57834693D681B35A5B /* AppContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDBA8088AB2F5BCBD4C98E64 /* AppContainer.swift */; };
+		3BB4C762D039AB2D9AA61464 /* NoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B2D3B72A983B991B7BAD09F /* NoteActions.swift */; };
 		490F1B6F1FCABF6302D10DC9 /* MarkdownHTMLRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B8C92F7DCEB2651E7D551C7 /* MarkdownHTMLRendererTests.swift */; };
 		50558043A85AC7890380A7AE /* MetadataChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 914A8D4F46B4580C77C02964 /* MetadataChip.swift */; };
 		5D4EFC353B962361EEF32D7F /* SearchTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A512BCA51AC3C2B62FDBADBB /* SearchTypes.swift */; };
@@ -98,6 +99,7 @@
 		6C4BC34FB3980F9F8B22D8D3 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		729925EC0A6980CE2D0E5287 /* FileCoordinatorIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileCoordinatorIO.swift; sourceTree = "<group>"; };
 		7833F83F27CA48D6FAC13E57 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		7B2D3B72A983B991B7BAD09F /* NoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteActions.swift; sourceTree = "<group>"; };
 		878D5B94302AE8FE99D493BD /* SearchIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchIndexTests.swift; sourceTree = "<group>"; };
 		914A8D4F46B4580C77C02964 /* MetadataChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetadataChip.swift; sourceTree = "<group>"; };
 		96F3D8706FE1825D7FF9B5FC /* MarkdownTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTextView.swift; sourceTree = "<group>"; };
@@ -172,6 +174,7 @@
 			children = (
 				2DE2933DD47FADF5EDB8455B /* EmptyStateView.swift */,
 				914A8D4F46B4580C77C02964 /* MetadataChip.swift */,
+				7B2D3B72A983B991B7BAD09F /* NoteActions.swift */,
 				7833F83F27CA48D6FAC13E57 /* SettingsView.swift */,
 			);
 			path = Shared;
@@ -500,6 +503,7 @@
 				F5D74DBB89772D09773760C0 /* MarkdownHTMLRenderer.swift in Sources */,
 				8E1BE5B58D706EF323D8DD4F /* MarkdownTextView.swift in Sources */,
 				50558043A85AC7890380A7AE /* MetadataChip.swift in Sources */,
+				3BB4C762D039AB2D9AA61464 /* NoteActions.swift in Sources */,
 				03155142821FB12DA42E52F9 /* NoteCollectionQuery.swift in Sources */,
 				2B02905842B2FB477A0B48C0 /* NoteDetailView.swift in Sources */,
 				64164BE2D3E200E72BB5C6D3 /* NoteDocument.swift in Sources */,
