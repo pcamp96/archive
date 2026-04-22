@@ -18,7 +18,7 @@ actor SearchIndex {
                 Entry(
                     noteID: note.id,
                     title: normalized(note.title),
-                    body: normalized(note.bodyPreview),
+                    body: normalized(note.searchableBodyText),
                     propertyText: normalized(note.propertyValues.values.map(\.stringValue).joined(separator: " ")),
                     modifiedAt: note.modifiedAt
                 )
@@ -30,7 +30,7 @@ actor SearchIndex {
         entries[note.id] = Entry(
             noteID: note.id,
             title: normalized(note.title),
-            body: normalized(note.bodyPreview),
+            body: normalized(note.searchableBodyText),
             propertyText: normalized(note.propertyValues.values.map(\.stringValue).joined(separator: " ")),
             modifiedAt: note.modifiedAt
         )

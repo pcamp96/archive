@@ -37,6 +37,7 @@ final class NoteRepository: @unchecked Sendable {
             relativePath: url.path.replacingOccurrences(of: rootURL.path + "/", with: ""),
             title: title,
             bodyPreview: preview(from: parsed.body),
+            searchableBodyText: parsed.body,
             createdAt: metadata.createdAt,
             modifiedAt: metadata.modifiedAt,
             propertyValues: editableProperties.summaryPropertyMap()

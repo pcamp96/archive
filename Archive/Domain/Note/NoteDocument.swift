@@ -6,9 +6,32 @@ struct NoteSummary: Identifiable, Hashable, Sendable {
     let relativePath: String
     let title: String
     let bodyPreview: String
+    let searchableBodyText: String
     let createdAt: Date
     let modifiedAt: Date
     let propertyValues: [String: PropertyValue]
+
+    init(
+        id: NoteID,
+        fileURL: URL,
+        relativePath: String,
+        title: String,
+        bodyPreview: String,
+        searchableBodyText: String? = nil,
+        createdAt: Date,
+        modifiedAt: Date,
+        propertyValues: [String: PropertyValue]
+    ) {
+        self.id = id
+        self.fileURL = fileURL
+        self.relativePath = relativePath
+        self.title = title
+        self.bodyPreview = bodyPreview
+        self.searchableBodyText = searchableBodyText ?? bodyPreview
+        self.createdAt = createdAt
+        self.modifiedAt = modifiedAt
+        self.propertyValues = propertyValues
+    }
 }
 
 extension NoteSummary {
@@ -22,6 +45,7 @@ extension NoteSummary {
                 .components(separatedBy: .newlines)
                 .first(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false })?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            searchableBodyText: document.body,
             createdAt: document.createdAt,
             modifiedAt: document.modifiedAt,
             propertyValues: document.editableProperties.summaryPropertyMap()
