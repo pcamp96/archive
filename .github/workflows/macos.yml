@@ -1,0 +1,148 @@
+name: macOS CI and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to publish when running manually, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Build and test Archive
+        run: |
+          xcodebuild test \
+            -project Archive.xcodeproj \
+            -scheme Archive \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+  release:
+    name: Sign, Notarize, and Publish
+    runs-on: macos-15
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    env:
+      APP_NAME: Archive
+      SCHEME: Archive
+      ARCHIVE_PATH: ${{ runner.temp }}/Archive.xcarchive
+      EXPORT_PATH: ${{ runner.temp }}/export
+      KEYCHAIN_PATH: ${{ runner.temp }}/app-signing.keychain-db
+      CERT_PATH: ${{ runner.temp }}/developer-id.p12
+      API_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
+      KEYCHAIN_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+      P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+      APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Validate release secrets
+        run: |
+          missing=0
+          for name in BUILD_CERTIFICATE_BASE64 P12_PASSWORD APP_STORE_CONNECT_API_KEY APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required secret: $name"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Install signing certificate
+        run: |
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+      - name: Install App Store Connect API key
+        run: |
+          printf '%s' "$APP_STORE_CONNECT_API_KEY" > "$API_KEY_PATH"
+          chmod 600 "$API_KEY_PATH"
+
+      - name: Archive app
+        run: |
+          xcodebuild archive \
+            -project Archive.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -archivePath "$ARCHIVE_PATH" \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            DEVELOPMENT_TEAM=7YRDJ7AV9J \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"
+
+      - name: Package signed app
+        run: |
+          mkdir -p "$EXPORT_PATH"
+          ditto -c -k --keepParent "$ARCHIVE_PATH/Products/Applications/$APP_NAME.app" "$EXPORT_PATH/$APP_NAME.zip"
+
+      - name: Notarize app
+        run: |
+          xcrun notarytool submit "$EXPORT_PATH/$APP_NAME.zip" \
+            --key "$API_KEY_PATH" \
+            --key-id "$APP_STORE_CONNECT_KEY_ID" \
+            --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "$ARCHIVE_PATH/Products/Applications/$APP_NAME.app"
+          ditto -c -k --keepParent "$ARCHIVE_PATH/Products/Applications/$APP_NAME.app" "$EXPORT_PATH/$APP_NAME-notarized.zip"
+
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Archive-macOS
+          path: ${{ env.EXPORT_PATH }}/${{ env.APP_NAME }}-notarized.zip
+          retention-days: 14
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            release_tag="${{ github.event.inputs.release_tag }}"
+          else
+            release_tag="$GITHUB_REF_NAME"
+          fi
+
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release upload "$release_tag" "$EXPORT_PATH/$APP_NAME-notarized.zip#${APP_NAME}-macOS.zip" --clobber
+          else
+            gh release create "$release_tag" "$EXPORT_PATH/$APP_NAME-notarized.zip#${APP_NAME}-macOS.zip" --generate-notes --title "$release_tag"
+          fi
+
+      - name: Clean up keychain material
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" || true
+          rm -f "$CERT_PATH" "$API_KEY_PATH"
