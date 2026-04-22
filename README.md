@@ -2,14 +2,6 @@
 
 Archive is a native macOS notes app for working directly on Markdown files in a local workspace. It keeps files canonical on disk, treats `.archive/` metadata as optional workspace state, and gives you both list and board views over the same note set.
 
-## App Icon
-
-Early icon direction for Archive:
-
-![Early Archive app icon](Archive/Resources/icon-marketing-1024.png)
-
-This is an early version of the app icon and should be treated as a working draft rather than final brand artwork.
-
 ## Current Scope
 
 - Browse a workspace of Markdown notes and folders
@@ -18,6 +10,13 @@ This is an early version of the app icon and should be treated as a working draf
 - Switch between list and board presentations
 - Search across note titles, body content, and properties
 - Copy plain text or rendered HTML fragments for publishing workflows
+
+## Coming Next
+
+- Continue bullet and numbered lists automatically when you press `Enter`
+- Fix remaining formatting inconsistencies while writing
+- Simplify the current copy and display options
+- A whole lot more that has not even been thought of yet
 
 ## Stack
 

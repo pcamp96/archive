@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct NoteDetailView: View {
@@ -139,9 +140,7 @@ private struct EditorialNoteSurface<HeaderContextMenu: View, PropertiesContent: 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(alignment: .top, spacing: 16) {
-                TextField("Title", text: $title)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 34, weight: .bold, design: .serif))
+                NoteTitleTextField(title: $title)
 
                 AutosaveBadge(state: autosaveState)
             }
@@ -161,6 +160,84 @@ private struct EditorialNoteSurface<HeaderContextMenu: View, PropertiesContent: 
         .padding(30)
         .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 34, y: 12)
+    }
+}
+
+private struct NoteTitleTextField: NSViewRepresentable {
+    @Binding var title: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(title: $title)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let textField = NSTextField()
+        textField.delegate = context.coordinator
+        textField.isBordered = false
+        textField.isBezeled = false
+        textField.drawsBackground = false
+        textField.focusRingType = .none
+        textField.isAutomaticTextCompletionEnabled = false
+        textField.usesSingleLineMode = true
+        textField.lineBreakMode = .byTruncatingTail
+        textField.font = .systemFont(ofSize: 34, weight: .bold)
+        textField.placeholderString = "Title"
+        textField.stringValue = title
+        context.coordinator.textField = textField
+        return textField
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        context.coordinator.textField = nsView
+        context.coordinator.applyExternalTitle(title, to: nsView)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        @Binding var title: String
+        weak var textField: NSTextField?
+
+        private var isApplyingExternalUpdate = false
+
+        init(title: Binding<String>) {
+            self._title = title
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard isApplyingExternalUpdate == false,
+                  let field = notification.object as? NSTextField else {
+                return
+            }
+
+            let newValue = field.stringValue
+            guard title != newValue else { return }
+            title = newValue
+        }
+
+        @MainActor
+        func applyExternalTitle(_ newTitle: String, to textField: NSTextField) {
+            guard textField.stringValue != newTitle else { return }
+
+            let editor = textField.currentEditor()
+            let wasEditing = editor != nil
+            let previousSelection = editor?.selectedRange ?? NSRange(location: textField.stringValue.count, length: 0)
+
+            isApplyingExternalUpdate = true
+            textField.stringValue = newTitle
+            isApplyingExternalUpdate = false
+
+            guard wasEditing, let window = textField.window else { return }
+            window.makeFirstResponder(textField)
+            if let editor = textField.currentEditor() {
+                editor.selectedRange = clampedSelection(previousSelection, maxLength: (newTitle as NSString).length)
+            }
+        }
+
+        private func clampedSelection(_ selection: NSRange, maxLength: Int) -> NSRange {
+            guard maxLength > 0 else { return NSRange(location: 0, length: 0) }
+            let location = min(selection.location, maxLength)
+            let length = min(selection.length, maxLength - location)
+            return NSRange(location: location, length: length)
+        }
     }
 }
 

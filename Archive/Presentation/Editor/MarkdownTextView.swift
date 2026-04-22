@@ -131,16 +131,24 @@ struct MarkdownTextView: NSViewRepresentable {
             isApplyingPresentation = true
             defer { isApplyingPresentation = false }
 
+            let window = textView.window
+            let wasFirstResponder = window?.firstResponder === textView
             let currentSelection = clampedSelection(textView.selectedRange(), maxLength: textStorage.length)
             let attributed = MarkdownPresentationBuilder.attributedString(for: textView.string, mode: displayMode)
+            textStorage.beginEditing()
             textStorage.setAttributedString(attributed)
+            textStorage.endEditing()
             textView.typingAttributes = MarkdownPresentationBuilder.typingAttributes(for: displayMode)
             textView.setSelectedRange(currentSelection)
             if let textView = textView as? MarkdownEditorTextView {
                 textView.displayMode = displayMode
                 textView.thematicBreakRanges = MarkdownPresentationBuilder.thematicBreakRanges(in: textView.string)
+                textView.blockMarkers = MarkdownPresentationBuilder.blockMarkers(in: textView.string, mode: displayMode)
             }
             lastDisplayMode = displayMode
+            if wasFirstResponder {
+                window?.makeFirstResponder(textView)
+            }
         }
 
         private func clampedSelection(_ selection: NSRange, maxLength: Int) -> NSRange {
@@ -157,10 +165,14 @@ private final class MarkdownEditorTextView: NSTextView {
     var thematicBreakRanges: [NSRange] = [] {
         didSet { needsDisplay = true }
     }
+    var blockMarkers: [RenderedBlockMarker] = [] {
+        didSet { needsDisplay = true }
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         drawThematicBreaks()
+        drawBlockMarkers()
     }
 
     private func drawThematicBreaks() {
@@ -206,10 +218,159 @@ private final class MarkdownEditorTextView: NSTextView {
             return NSColor.separatorColor
         }
     }
+
+    private func drawBlockMarkers() {
+        guard displayMode == .markupOnly,
+              let layoutManager,
+              let textContainer else {
+            return
+        }
+
+        let textContainerOrigin = self.textContainerOrigin
+        let nsString = string as NSString
+
+        for marker in blockMarkers {
+            guard marker.paragraphRange.location < nsString.length else { continue }
+
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: marker.paragraphRange.location)
+            var effectiveRange = NSRange()
+            let lineRect = layoutManager.lineFragmentRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: &effectiveRange,
+                withoutAdditionalLayout: true
+            )
+            let usedRect = layoutManager.lineFragmentUsedRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: nil,
+                withoutAdditionalLayout: true
+            )
+
+            let markerX = textContainerOrigin.x + marker.leadingInset
+            let markerRect = NSRect(
+                x: markerX,
+                y: usedRect.minY + textContainerOrigin.y,
+                width: max(marker.markerWidth, marker.headIndent - marker.leadingInset),
+                height: max(usedRect.height, lineRect.height - 6)
+            )
+            let paragraphFont = markerParagraphFont()
+            let baselineY = textContainerOrigin.y + lineRect.minY + layoutManager.location(forGlyphAt: glyphIndex).y
+
+            if marker.quoteDepth > 0 {
+                let paragraphGlyphRange = layoutManager.glyphRange(forCharacterRange: marker.paragraphRange, actualCharacterRange: nil)
+                let paragraphRect = layoutManager.boundingRect(forGlyphRange: paragraphGlyphRange, in: textContainer)
+                let quoteRect = paragraphRect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+                drawQuoteMarkers(depth: marker.quoteDepth, in: quoteRect, leadingInset: marker.leadingInset)
+            }
+
+            switch marker.kind {
+            case .unordered:
+                drawUnorderedMarker(in: markerRect, baselineY: baselineY, paragraphFont: paragraphFont)
+            case .ordered(let ordinal):
+                drawTextMarker(ordinal, in: markerRect, font: .systemFont(ofSize: 14, weight: .medium), baselineY: baselineY, paragraphFont: paragraphFont)
+            case .task(let isChecked):
+                drawTextMarker(isChecked ? "☑" : "☐", in: markerRect, font: .systemFont(ofSize: 15, weight: .regular), baselineY: baselineY, paragraphFont: paragraphFont)
+            case .quote:
+                break
+            }
+        }
+    }
+
+    private func drawQuoteMarkers(depth: Int, in rect: NSRect, leadingInset: CGFloat) {
+        guard depth > 0 else { return }
+
+        for level in 0..<depth {
+            let quotePath = NSBezierPath()
+            let x = rect.minX + leadingInset + CGFloat(level * 18) + 5
+            quotePath.move(to: NSPoint(x: x, y: rect.minY + 3))
+            quotePath.line(to: NSPoint(x: x, y: rect.maxY - 3))
+            quotePath.lineWidth = 2
+            NSColor.secondaryLabelColor.withAlphaComponent(0.65).setStroke()
+            quotePath.stroke()
+        }
+    }
+
+    private func markerParagraphFont() -> NSFont {
+        switch displayMode {
+        case .markdownOnly:
+            return .monospacedSystemFont(ofSize: 14, weight: .regular)
+        case .hybrid, .markupOnly:
+            return .systemFont(ofSize: 16, weight: .regular)
+        }
+    }
+
+    private func drawTextMarker(
+        _ marker: String,
+        in rect: NSRect,
+        font: NSFont,
+        baselineY: CGFloat,
+        paragraphFont: NSFont
+    ) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.secondaryLabelColor
+        ]
+        let size = marker.size(withAttributes: attributes)
+        let baselineAdjustment = (paragraphFont.ascender - font.ascender) - ((paragraphFont.capHeight - font.capHeight) / 2)
+        let drawRect = NSRect(
+            x: max(rect.minX, rect.maxX - size.width - 4),
+            y: baselineY - font.ascender + baselineAdjustment,
+            width: size.width,
+            height: size.height
+        )
+        marker.draw(in: drawRect, withAttributes: attributes)
+    }
+
+    private func drawUnorderedMarker(
+        in rect: NSRect,
+        baselineY: CGFloat,
+        paragraphFont: NSFont
+    ) {
+        let diameter = max(4, round(paragraphFont.xHeight * 0.48))
+        let centerY = baselineY - (paragraphFont.xHeight * 0.5)
+        let markerRect = NSRect(
+            x: max(rect.minX, rect.maxX - diameter - 6),
+            y: centerY - (diameter / 2),
+            width: diameter,
+            height: diameter
+        )
+        let path = NSBezierPath(ovalIn: markerRect)
+        NSColor.secondaryLabelColor.setFill()
+        path.fill()
+    }
+}
+
+struct RenderedBlockMarker {
+    enum Kind: Equatable {
+        case unordered
+        case ordered(String)
+        case task(Bool)
+        case quote
+    }
+
+    let paragraphRange: NSRange
+    let markerRange: NSRange
+    let kind: Kind
+    let depth: Int
+    let quoteDepth: Int
+    let leadingInset: CGFloat
+    let markerWidth: CGFloat
+    let headIndent: CGFloat
 }
 
 @MainActor
 private enum MarkdownPresentationBuilder {
+    private struct BlockMarkerSnapshot {
+        var paragraphRange: NSRange
+        let markerRange: NSRange
+        let kind: RenderedBlockMarker.Kind
+        let depth: Int
+        let quoteDepth: Int
+        let continuationIndentColumns: Int
+        let leadingInset: CGFloat
+        let markerWidth: CGFloat
+        let headIndent: CGFloat
+    }
+
     private struct SetextHeadingRange {
         let contentRange: NSRange
         let underlineRange: NSRange
@@ -237,6 +398,7 @@ private enum MarkdownPresentationBuilder {
         let setextHeadings: [SetextHeadingRange]
         let fencedBlocks: [NSRange]
         let fenceDelimiters: [NSRange]
+        let blockMarkers: [BlockMarkerSnapshot]
     }
 
     static func attributedString(for text: String, mode: MarkdownDisplayMode) -> NSAttributedString {
@@ -260,12 +422,30 @@ private enum MarkdownPresentationBuilder {
         blockStructure(in: text).thematicBreaks
     }
 
+    static func blockMarkers(in text: String, mode: MarkdownDisplayMode) -> [RenderedBlockMarker] {
+        guard mode == .markupOnly else { return [] }
+
+        return blockStructure(in: text).blockMarkers.map {
+            RenderedBlockMarker(
+                paragraphRange: $0.paragraphRange,
+                markerRange: $0.markerRange,
+                kind: $0.kind,
+                depth: $0.depth,
+                quoteDepth: $0.quoteDepth,
+                leadingInset: $0.leadingInset,
+                markerWidth: $0.markerWidth,
+                headIndent: $0.headIndent
+            )
+        }
+    }
+
     private static func blockStructure(in text: String) -> BlockStructureSnapshot {
         let nsText = text as NSString
         var thematicBreaks: [NSRange] = []
         var setextHeadings: [SetextHeadingRange] = []
         var fencedBlocks: [NSRange] = []
         var fenceDelimiters: [NSRange] = []
+        var blockMarkers: [BlockMarkerSnapshot] = []
         var searchLocation = 0
         var currentFence: FenceState?
         var previousContentLine: (kind: SetextCandidateKind, range: NSRange)?
@@ -308,6 +488,19 @@ private enum MarkdownPresentationBuilder {
             } else if trimmedLine.isEmpty {
                 previousContentLine = nil
             } else {
+                if var marker = blockMarker(
+                    in: line,
+                    lineRange: lineRange,
+                    visibleLineRange: visibleLineRange,
+                    paragraphRange: nsText.paragraphRange(for: lineRange)
+                ) {
+                    marker.paragraphRange = continuedListItemRange(
+                        startingAt: lineRange,
+                        marker: marker,
+                        in: nsText
+                    )
+                    blockMarkers.append(marker)
+                }
                 previousContentLine = (
                     kind: setextCandidateKind(for: line),
                     range: visibleLineRange
@@ -325,7 +518,8 @@ private enum MarkdownPresentationBuilder {
             thematicBreaks: thematicBreaks,
             setextHeadings: setextHeadings,
             fencedBlocks: fencedBlocks,
-            fenceDelimiters: fenceDelimiters
+            fenceDelimiters: fenceDelimiters,
+            blockMarkers: blockMarkers
         )
     }
 
@@ -373,12 +567,9 @@ private enum MarkdownPresentationBuilder {
             styleMarker(spacerRange, in: attributed, mode: mode)
         }
 
-        applyMatches(
-            pattern: #"(?m)^([ \t]*(?:[-*+]\s+|\d+\.\s+|>\s+))"#,
-            in: attributed,
-            skipping: blockStructure.fencedBlocks
-        ) { match in
-            styleMarker(match.range(at: 1), in: attributed, mode: mode)
+        for marker in blockStructure.blockMarkers.reversed() {
+            styleMarker(marker.markerRange, in: attributed, mode: mode)
+            styleBlockParagraph(marker, in: attributed, mode: mode)
         }
 
         for range in blockStructure.fenceDelimiters.reversed() {
@@ -486,6 +677,35 @@ private enum MarkdownPresentationBuilder {
                 .foregroundColor: NSColor.clear,
                 .font: NSFont.systemFont(ofSize: 1)
             ], range: range)
+        }
+    }
+
+    private static func styleBlockParagraph(
+        _ marker: BlockMarkerSnapshot,
+        in attributed: NSMutableAttributedString,
+        mode: MarkdownDisplayMode
+    ) {
+        guard marker.paragraphRange.location != NSNotFound,
+              marker.paragraphRange.length > 0 else {
+            return
+        }
+
+        switch mode {
+        case .markdownOnly:
+            return
+        case .hybrid:
+            if case .quote = marker.kind {
+                attributed.addAttributes([
+                    .foregroundColor: NSColor.secondaryLabelColor
+                ], range: marker.markerRange)
+            }
+        case .markupOnly:
+            let existing = attributed.attribute(.paragraphStyle, at: marker.paragraphRange.location, effectiveRange: nil) as? NSParagraphStyle
+            let paragraph = (existing?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+            paragraph.firstLineHeadIndent = marker.headIndent
+            paragraph.headIndent = marker.headIndent
+            paragraph.paragraphSpacing = max(paragraph.paragraphSpacing, 10)
+            attributed.addAttribute(.paragraphStyle, value: paragraph, range: marker.paragraphRange)
         }
     }
 
@@ -685,6 +905,288 @@ private enum MarkdownPresentationBuilder {
         return NSFont.systemFont(ofSize: CGFloat(size), weight: weight)
     }
 
+    private static func blockMarker(
+        in line: String,
+        lineRange: NSRange,
+        visibleLineRange: NSRange,
+        paragraphRange: NSRange
+    ) -> BlockMarkerSnapshot? {
+        let content = line.trimmingCharacters(in: .newlines)
+        guard content.isEmpty == false else { return nil }
+
+        let characters = Array(content)
+        var index = 0
+        var consumedSourceCharacters = 0
+        var quoteDepth = 0
+        var indentColumns = 0
+
+        while index < characters.count {
+            let character = characters[index]
+            if character == " " {
+                indentColumns += 1
+                index += 1
+                consumedSourceCharacters += 1
+                continue
+            }
+            if character == "\t" {
+                indentColumns += 4
+                index += 1
+                consumedSourceCharacters += 1
+                continue
+            }
+            break
+        }
+
+        let indentationDepth = indentColumns / 2
+
+        while index < characters.count, characters[index] == ">" {
+            quoteDepth += 1
+            index += 1
+            consumedSourceCharacters += 1
+
+            while index < characters.count, characters[index].isWhitespace, characters[index].isNewline == false {
+                index += 1
+                consumedSourceCharacters += 1
+            }
+        }
+
+        let markerStart = lineRange.location
+        let baseIndent = CGFloat(indentationDepth * 18)
+        let quoteIndent = CGFloat(max(quoteDepth - 1, 0) * 18)
+        let nestedLeadingInset = baseIndent + quoteIndent
+
+        if let taskMatch = taskListMarker(in: characters, startingAt: index) {
+            let markerLength = consumedSourceCharacters + taskMatch.length
+            let kind: RenderedBlockMarker.Kind = .task(taskMatch.isChecked)
+            let markerWidth = blockMarkerWidth(for: kind)
+            return BlockMarkerSnapshot(
+                paragraphRange: paragraphRange,
+                markerRange: NSRange(location: markerStart, length: markerLength),
+                kind: kind,
+                depth: indentationDepth + quoteDepth,
+                quoteDepth: quoteDepth,
+                continuationIndentColumns: consumedSourceCharacters + taskMatch.length,
+                leadingInset: nestedLeadingInset,
+                markerWidth: markerWidth,
+                headIndent: nestedLeadingInset + markerWidth + blockContentGap(for: kind)
+            )
+        }
+
+        if let orderedMatch = orderedListMarker(in: characters, startingAt: index) {
+            let markerLength = consumedSourceCharacters + orderedMatch.length
+            let kind: RenderedBlockMarker.Kind = .ordered(orderedMatch.marker)
+            let markerWidth = blockMarkerWidth(for: kind)
+            return BlockMarkerSnapshot(
+                paragraphRange: paragraphRange,
+                markerRange: NSRange(location: markerStart, length: markerLength),
+                kind: kind,
+                depth: indentationDepth + quoteDepth,
+                quoteDepth: quoteDepth,
+                continuationIndentColumns: consumedSourceCharacters + orderedMatch.length,
+                leadingInset: nestedLeadingInset,
+                markerWidth: markerWidth,
+                headIndent: nestedLeadingInset + markerWidth + blockContentGap(for: kind)
+            )
+        }
+
+        if let unorderedLength = unorderedListMarkerLength(in: characters, startingAt: index) {
+            let markerLength = consumedSourceCharacters + unorderedLength
+            let kind: RenderedBlockMarker.Kind = .unordered
+            let markerWidth = blockMarkerWidth(for: kind)
+            return BlockMarkerSnapshot(
+                paragraphRange: paragraphRange,
+                markerRange: NSRange(location: markerStart, length: markerLength),
+                kind: kind,
+                depth: indentationDepth + quoteDepth,
+                quoteDepth: quoteDepth,
+                continuationIndentColumns: consumedSourceCharacters + unorderedLength,
+                leadingInset: nestedLeadingInset,
+                markerWidth: markerWidth,
+                headIndent: nestedLeadingInset + markerWidth + blockContentGap(for: kind)
+            )
+        }
+
+        guard quoteDepth > 0 else { return nil }
+        return BlockMarkerSnapshot(
+            paragraphRange: paragraphRange,
+            markerRange: NSRange(location: markerStart, length: consumedSourceCharacters),
+            kind: .quote,
+            depth: indentationDepth + quoteDepth,
+            quoteDepth: quoteDepth,
+            continuationIndentColumns: consumedSourceCharacters,
+            leadingInset: nestedLeadingInset,
+            markerWidth: 8,
+            headIndent: nestedLeadingInset + blockMarkerWidth(for: .quote) + blockContentGap(for: .quote)
+        )
+    }
+
+    private static func continuedListItemRange(
+        startingAt lineRange: NSRange,
+        marker: BlockMarkerSnapshot,
+        in nsText: NSString
+    ) -> NSRange {
+        guard marker.kind != .quote else { return marker.paragraphRange }
+
+        var extendedRange = lineRange
+        var cursor = NSMaxRange(lineRange)
+
+        while cursor < nsText.length {
+            let nextLineRange = nsText.lineRange(for: NSRange(location: cursor, length: 0))
+            let nextLine = nsText.substring(with: nextLineRange)
+            let trimmed = nextLine.trimmingCharacters(in: .newlines)
+
+            if trimmed.isEmpty {
+                break
+            }
+
+            let nextVisibleRange = NSRange(
+                location: nextLineRange.location,
+                length: nextLineRange.length - trailingNewlineLength(in: nextLine)
+            )
+
+            if blockMarker(
+                in: nextLine,
+                lineRange: nextLineRange,
+                visibleLineRange: nextVisibleRange,
+                paragraphRange: nsText.paragraphRange(for: nextLineRange)
+            ) != nil {
+                break
+            }
+
+            if leadingIndentColumns(in: nextLine) < marker.continuationIndentColumns {
+                break
+            }
+
+            extendedRange.length = NSMaxRange(nextLineRange) - extendedRange.location
+            cursor = NSMaxRange(nextLineRange)
+        }
+
+        return extendedRange
+    }
+
+    private static func blockMarkerWidth(for kind: RenderedBlockMarker.Kind) -> CGFloat {
+        let markerText: String
+        let font: NSFont
+
+        switch kind {
+        case .unordered:
+            markerText = "•"
+            font = .systemFont(ofSize: 16, weight: .semibold)
+        case .ordered(let ordinal):
+            markerText = ordinal
+            font = .systemFont(ofSize: 14, weight: .medium)
+        case .task(let isChecked):
+            markerText = isChecked ? "☑" : "☐"
+            font = .systemFont(ofSize: 15, weight: .regular)
+        case .quote:
+            return 8
+        }
+
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        return ceil(markerText.size(withAttributes: attributes).width)
+    }
+
+    private static func blockContentGap(for kind: RenderedBlockMarker.Kind) -> CGFloat {
+        switch kind {
+        case .unordered, .ordered:
+            return 6
+        case .task:
+            return 7
+        case .quote:
+            return 10
+        }
+    }
+
+    private static func unorderedListMarkerLength(in characters: [Character], startingAt start: Int) -> Int? {
+        guard start + 1 < characters.count else { return nil }
+        guard ["-", "*", "+"].contains(characters[start]) else { return nil }
+
+        var index = start + 1
+        guard characters[index].isWhitespace, characters[index].isNewline == false else { return nil }
+        while index < characters.count, characters[index].isWhitespace, characters[index].isNewline == false {
+            index += 1
+        }
+        return index - start
+    }
+
+    private static func orderedListMarker(in characters: [Character], startingAt start: Int) -> (length: Int, marker: String)? {
+        guard start < characters.count, characters[start].isNumber else { return nil }
+
+        var index = start
+        var digits = ""
+        while index < characters.count, characters[index].isNumber {
+            digits.append(characters[index])
+            index += 1
+        }
+
+        guard index < characters.count else { return nil }
+        let delimiter = characters[index]
+        guard delimiter == "." || delimiter == ")" else { return nil }
+        index += 1
+        guard index < characters.count, characters[index].isWhitespace, characters[index].isNewline == false else { return nil }
+        while index < characters.count, characters[index].isWhitespace, characters[index].isNewline == false {
+            index += 1
+        }
+
+        return (index - start, "\(digits)\(delimiter)")
+    }
+
+    private static func taskListMarker(in characters: [Character], startingAt start: Int) -> (length: Int, isChecked: Bool)? {
+        let prefixLength: Int
+        if let unorderedLength = unorderedListMarkerLength(in: characters, startingAt: start) {
+            prefixLength = unorderedLength
+        } else if let orderedLength = orderedListMarker(in: characters, startingAt: start)?.length {
+            prefixLength = orderedLength
+        } else {
+            return nil
+        }
+
+        let markerEnd = start + prefixLength
+        guard markerEnd + 2 < characters.count else { return nil }
+        guard characters[markerEnd] == "[" else { return nil }
+
+        let stateCharacter = characters[markerEnd + 1]
+        let isChecked: Bool
+        switch stateCharacter {
+        case "x", "X":
+            isChecked = true
+        case " ":
+            isChecked = false
+        default:
+            return nil
+        }
+
+        guard characters[markerEnd + 2] == "]" else { return nil }
+        var index = markerEnd + 3
+        guard index < characters.count, characters[index].isWhitespace, characters[index].isNewline == false else {
+            return nil
+        }
+        while index < characters.count, characters[index].isWhitespace, characters[index].isNewline == false {
+            index += 1
+        }
+
+        return (index - start, isChecked)
+    }
+
+    private static func leadingIndentColumns(in line: String) -> Int {
+        var columns = 0
+
+        for character in line {
+            switch character {
+            case " ":
+                columns += 1
+            case "\t":
+                columns += 4
+            case "\n", "\r":
+                return columns
+            default:
+                return columns
+            }
+        }
+
+        return columns
+    }
+
     private static func trailingNewlineLength(in line: String) -> Int {
         if line.hasSuffix("\r\n") {
             return 2
@@ -702,7 +1204,19 @@ private enum MarkdownPresentationBuilder {
             attributedString: attributedString(for: text, mode: mode),
             thematicBreaks: blockStructure.thematicBreaks,
             setextUnderlineRanges: blockStructure.setextHeadings.map { $0.underlineRange },
-            fencedBlocks: blockStructure.fencedBlocks
+            fencedBlocks: blockStructure.fencedBlocks,
+            blockMarkers: blockStructure.blockMarkers.map {
+                RenderedBlockMarker(
+                    paragraphRange: $0.paragraphRange,
+                    markerRange: $0.markerRange,
+                    kind: $0.kind,
+                    depth: $0.depth,
+                    quoteDepth: $0.quoteDepth,
+                    leadingInset: $0.leadingInset,
+                    markerWidth: $0.markerWidth,
+                    headIndent: $0.headIndent
+                )
+            }
         )
     }
 #endif
@@ -716,6 +1230,7 @@ enum MarkdownPresentationDebug {
         let thematicBreaks: [NSRange]
         let setextUnderlineRanges: [NSRange]
         let fencedBlocks: [NSRange]
+        let blockMarkers: [RenderedBlockMarker]
     }
 
     static func snapshot(for text: String, mode: MarkdownDisplayMode) -> Snapshot {

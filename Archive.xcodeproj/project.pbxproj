@@ -697,6 +697,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 0.0.1;
 				PRODUCT_NAME = Archive;
 				SDKROOT = macosx;
 			};
@@ -731,6 +732,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 0.0.1;
 				PRODUCT_NAME = Archive;
 				SDKROOT = macosx;
 			};

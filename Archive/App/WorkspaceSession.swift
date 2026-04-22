@@ -51,6 +51,7 @@ final class WorkspaceSession {
     private var backgroundRenameTickets: [String: UUID] = [:]
     private var backgroundRenameTitles: [String: String] = [:]
     private var backgroundRenameTasks: [String: Task<Void, Never>] = [:]
+    private var backgroundRenameKeysByResourceIdentifier: [String: String] = [:]
 
     init(
         rootURL: URL,
@@ -118,8 +119,15 @@ final class WorkspaceSession {
     }
 
     var currentNoteSummary: NoteSummary? {
-        guard let selectedNoteID else { return nil }
-        return notes.first(where: { $0.id == selectedNoteID })
+        if let selectedNoteID {
+            return notes.first(where: { $0.id == selectedNoteID })
+                ?? notes.first(where: { $0.id.resourceIdentifier == selectedNoteID.resourceIdentifier })
+                ?? currentEditorNoteSummary
+        }
+
+        guard let editorNoteID = editorSession?.noteID else { return nil }
+        return notes.first(where: { $0.id == editorNoteID })
+            ?? notes.first(where: { $0.id.resourceIdentifier == editorNoteID.resourceIdentifier })
     }
 
     var currentEditorNoteSummary: NoteSummary? {
@@ -229,7 +237,8 @@ final class WorkspaceSession {
         let draftToSave = editorSession.draft
         let noteID = editorSession.noteID
         let originalFileURL = editorSession.originalNote.fileURL
-        cancelPendingBackgroundRename(for: noteID.resourceIdentifier)
+        let renameKey = noteID.id
+        cancelPendingBackgroundRename(for: renameKey)
 
         do {
             let persistedDocument = try await noteRepository.saveDraft(draftToSave, original: editorSession.originalNote, registry: propertyRegistry)
@@ -241,7 +250,12 @@ final class WorkspaceSession {
                     replacingFileURL: originalFileURL,
                     shouldSelect: browserState.selectedNoteID == noteID
                 )
-                queueBackgroundRenameIfNeeded(for: persistedDocument, expectedSavedDraft: draftToSave)
+                queueBackgroundRenameIfNeeded(
+                    for: persistedDocument,
+                    renameKey: renameKey,
+                    resourceIdentifiers: [noteID.resourceIdentifier, persistedDocument.id.resourceIdentifier],
+                    expectedSavedDraft: draftToSave
+                )
                 return
             }
 
@@ -250,9 +264,14 @@ final class WorkspaceSession {
                 with: persistedDocument,
                 replacingNoteID: noteID,
                 replacingFileURL: originalFileURL,
-                shouldSelect: true
+                shouldSelect: false
             )
-            queueBackgroundRenameIfNeeded(for: persistedDocument, expectedSavedDraft: draftToSave)
+            queueBackgroundRenameIfNeeded(
+                for: persistedDocument,
+                renameKey: renameKey,
+                resourceIdentifiers: [noteID.resourceIdentifier, persistedDocument.id.resourceIdentifier],
+                expectedSavedDraft: draftToSave
+            )
         } catch let NoteRepositoryError.versionConflict(message) {
             editorSession.conflictMessage = message
             editorSession.autosaveState = .conflict
@@ -313,9 +332,13 @@ final class WorkspaceSession {
         return true
     }
 
-    private func queueBackgroundRenameIfNeeded(for document: NoteDocument, expectedSavedDraft: NoteDraft) {
+    private func queueBackgroundRenameIfNeeded(
+        for document: NoteDocument,
+        renameKey: String,
+        resourceIdentifiers: [String],
+        expectedSavedDraft: NoteDraft
+    ) {
         let title = expectedSavedDraft.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let renameKey = document.id.resourceIdentifier
         guard title.isEmpty == false else {
             cancelPendingBackgroundRename(for: renameKey)
             return
@@ -325,6 +348,9 @@ final class WorkspaceSession {
         backgroundRenameTickets[renameKey] = ticket
         backgroundRenameTitles[renameKey] = title
         backgroundRenameTasks[renameKey]?.cancel()
+        for identifier in resourceIdentifiers where identifier.isEmpty == false {
+            backgroundRenameKeysByResourceIdentifier[identifier] = renameKey
+        }
 
         let rootURL = self.rootURL
         let registry = self.propertyRegistry
@@ -378,17 +404,16 @@ final class WorkspaceSession {
         guard backgroundRenameTickets[renameKey] == ticket else { return }
 
         if let currentEditorSession = editorSession,
-           currentEditorSession.noteID.resourceIdentifier == renameKey {
+           currentEditorSession.noteID.id == renameKey
+            || currentEditorSession.originalNote.fileURL.standardizedFileURL == originalDocument.fileURL.standardizedFileURL {
             currentEditorSession.reconcileSavedDocument(renamedDocument, expectedSavedDraft: expectedSavedDraft)
         }
 
-        let shouldSelectRenamedNote = editorSession?.noteID.resourceIdentifier == renameKey
-            || browserState.selectedNoteID?.resourceIdentifier == renameKey
         replaceLocalNote(
             with: renamedDocument,
             replacingNoteID: originalDocument.id,
             replacingFileURL: originalDocument.fileURL,
-            shouldSelect: shouldSelectRenamedNote
+            shouldSelect: false
         )
         finishBackgroundRenameTask(for: renameKey, ticket: ticket)
     }
@@ -398,6 +423,7 @@ final class WorkspaceSession {
         backgroundRenameTickets.removeValue(forKey: renameKey)
         backgroundRenameTitles.removeValue(forKey: renameKey)
         backgroundRenameTasks.removeValue(forKey: renameKey)
+        backgroundRenameKeysByResourceIdentifier = backgroundRenameKeysByResourceIdentifier.filter { $0.value != renameKey }
     }
 
     private func cancelPendingBackgroundRename(for renameKey: String) {
@@ -405,6 +431,7 @@ final class WorkspaceSession {
         backgroundRenameTitles.removeValue(forKey: renameKey)
         backgroundRenameTasks[renameKey]?.cancel()
         backgroundRenameTasks.removeValue(forKey: renameKey)
+        backgroundRenameKeysByResourceIdentifier = backgroundRenameKeysByResourceIdentifier.filter { $0.value != renameKey }
     }
 
     private func shouldRunBackgroundRename(for renameKey: String, title: String, ticket: UUID) -> Bool {
@@ -419,8 +446,10 @@ final class WorkspaceSession {
     }
 
     private func waitForPendingBackgroundRename(for noteID: NoteID) async {
-        let renameKey = noteID.resourceIdentifier
-        guard let task = backgroundRenameTasks[renameKey] else { return }
+        let renameKey = noteID.id
+        let task = backgroundRenameTasks[renameKey]
+            ?? backgroundRenameKeysByResourceIdentifier[noteID.resourceIdentifier].flatMap { backgroundRenameTasks[$0] }
+        guard let task else { return }
         await task.value
     }
 
@@ -734,13 +763,27 @@ final class WorkspaceSession {
                     || (normalizedReplacingFileURL != nil && existing.fileURL.standardizedFileURL == normalizedReplacingFileURL))
         }
         notes.sort(using: KeyPathComparator(\.modifiedAt, order: .reverse))
-        if shouldSelect {
+        let shouldUpdateSelectionIdentity = browserState.selectedNoteID?.resourceIdentifier == summary.id.resourceIdentifier
+        let shouldDeferSelectionIdentityUpdate = shouldUpdateSelectionIdentity && hasActiveEditorTextFocus(for: summary.id)
+        if shouldSelect || (shouldUpdateSelectionIdentity && shouldDeferSelectionIdentityUpdate == false) {
+            guard browserState.selectedNoteID != summary.id else {
+                Task {
+                    await workspaceRepository.updateSearchIndex(with: summary)
+                    await refreshSearch()
+                }
+                return
+            }
             browserState.selectedNoteID = summary.id
         }
         Task {
             await workspaceRepository.updateSearchIndex(with: summary)
             await refreshSearch()
         }
+    }
+
+    private func hasActiveEditorTextFocus(for noteID: NoteID) -> Bool {
+        guard editorSession?.noteID.resourceIdentifier == noteID.resourceIdentifier else { return false }
+        return NSApp.keyWindow?.firstResponder is NSTextView
     }
 
     private func prepareNoteForFileMutation(_ note: NoteSummary, fallbackMessage: String) async -> NoteSummary? {
@@ -751,7 +794,11 @@ final class WorkspaceSession {
             return nil
         }
         await waitForPendingBackgroundRename(for: note.id)
-        return notes.first(where: { $0.id == note.id }) ?? note
+        return notes.first(where: {
+            $0.id == note.id
+                || $0.id.resourceIdentifier == note.id.resourceIdentifier
+                || $0.fileURL.standardizedFileURL == note.fileURL.standardizedFileURL
+        }) ?? note
     }
 }
 
@@ -826,8 +873,9 @@ final class EditorSession {
 
     func applySavedDocument(_ document: NoteDocument) {
         originalNote = document
-        draft = NoteDraft(note: document)
-        lastSavedDraft = draft
+        let rebasedDraft = draft.rebased(on: document)
+        draft = rebasedDraft
+        lastSavedDraft = rebasedDraft
         autosaveState = .saved
         conflictMessage = nil
     }
@@ -837,14 +885,15 @@ final class EditorSession {
         originalNote = document
 
         if currentDraft.matchesEditableContent(of: expectedSavedDraft) {
-            applySavedDocument(document)
+            let rebasedDraft = currentDraft.rebased(on: document)
+            draft = rebasedDraft
+            lastSavedDraft = rebasedDraft
+            autosaveState = .saved
+            conflictMessage = nil
             return
         }
 
-        var rebasedDraft = NoteDraft(note: document)
-        rebasedDraft.title = currentDraft.title
-        rebasedDraft.properties = currentDraft.properties
-        rebasedDraft.body = currentDraft.body
+        let rebasedDraft = currentDraft.rebased(on: document)
 
         draft = rebasedDraft
         lastSavedDraft = NoteDraft(note: document)
@@ -868,5 +917,13 @@ private extension NoteDraft {
         title == other.title
             && properties == other.properties
             && body == other.body
+    }
+
+    func rebased(on note: NoteDocument) -> NoteDraft {
+        var rebasedDraft = NoteDraft(note: note)
+        rebasedDraft.title = title
+        rebasedDraft.properties = properties
+        rebasedDraft.body = body
+        return rebasedDraft
     }
 }
