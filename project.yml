@@ -24,6 +24,9 @@ targets:
     platform: macOS
     sources:
       - path: Archive
+        excludes:
+          - Resources/AppIcon-*.png
+          - Resources/icon-marketing-1024.png
     settings:
       base:
         PRODUCT_NAME: Archive
