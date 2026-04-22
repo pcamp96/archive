@@ -36,9 +36,8 @@ private struct BoardColumnView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(column.notes) { note in
-                        BoardCardView(note: note, boardView: boardView) {
-                            session.browserState.selectedNoteID = note.id
-                            session.openNote(note)
+                        BoardCardView(session: session, note: note, boardView: boardView) {
+                            session.revealNote(note)
                         }
                         .draggable(note.id.id)
                     }
@@ -64,6 +63,7 @@ private struct BoardColumnView: View {
 }
 
 private struct BoardCardView: View {
+    @Bindable var session: WorkspaceSession
     let note: NoteSummary
     let boardView: SavedBoardView
     let open: () -> Void
@@ -101,6 +101,9 @@ private struct BoardCardView: View {
             .background(Color(nsColor: .textBackgroundColor).opacity(0.96), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            NoteContextMenuContent(session: session, note: note)
+        }
     }
 
     private var primaryChipTitle: String? {

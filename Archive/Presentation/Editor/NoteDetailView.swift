@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct NoteDetailView: View {
@@ -22,6 +21,11 @@ struct NoteDetailView: View {
                 EditorialNoteSurface(
                     title: titleBinding,
                     autosaveState: editorSession.autosaveState,
+                    headerContextMenu: {
+                        if let note = workspaceSession.currentEditorNoteSummary {
+                            NoteContextMenuContent(session: workspaceSession, note: note, showsOpenAction: false)
+                        }
+                    },
                     propertiesContent: {
                         if editorSession.draft.properties.isEmpty {
                             AddPropertyCallout(action: showPropertySheet)
@@ -50,44 +54,12 @@ struct NoteDetailView: View {
             .padding(.vertical, 22)
         }
         .toolbar {
-            ToolbarItemGroup {
-                Button("Copy") {
-                    editorSession.copyMarkdownSelection()
-                }
-
-                Menu("Display") {
-                    Picker("Editor Mode", selection: displayModeBinding) {
-                        ForEach(MarkdownDisplayMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-
-                    if editorSession.displayModeOverride != nil {
-                        Divider()
-                        Button("Use Workspace Default") {
-                            editorSession.displayModeOverride = nil
-                        }
-                    }
-                }
-
-                Menu("Note") {
-                    Button("Copy as Markdown") {
-                        editorSession.copyMarkdownSelection()
-                    }
-                    Button("Copy as HTML") {
-                        editorSession.copyHTMLSelection()
-                    }
-                    Divider()
-                    Button("Rename…", action: promptRename)
-                    Button("Move…", action: promptMove)
-                    Divider()
-                    Button("Delete", role: .destructive) {
-                        Task {
-                            await workspaceSession.deleteCurrentNote()
-                        }
-                    }
-                }
-            }
+            NoteToolbarActionGroup(
+                session: workspaceSession,
+                editorSession: editorSession,
+                effectiveDisplayMode: effectiveDisplayMode,
+                displayModeBinding: displayModeBinding
+            )
         }
         .task(id: AutosaveTaskID(noteID: editorSession.noteID, nonce: editorSession.autosaveNonce)) {
             await workspaceSession.autosaveIfNeeded(for: editorSession)
@@ -154,42 +126,12 @@ struct NoteDetailView: View {
             await workspaceSession.flushActiveNote()
         }
     }
-
-    private func promptRename() {
-        guard let summary = workspaceSession.currentNoteSummary else { return }
-        let panel = NSSavePanel()
-        panel.title = "Rename Note"
-        panel.directoryURL = summary.fileURL.deletingLastPathComponent()
-        panel.nameFieldStringValue = summary.fileURL.deletingPathExtension().lastPathComponent
-        panel.canCreateDirectories = false
-        panel.allowedContentTypes = []
-        panel.isExtensionHidden = false
-
-        guard panel.runModal() == .OK else { return }
-        let proposedName = panel.nameFieldStringValue
-        Task {
-            await workspaceSession.renameCurrentNote(to: proposedName)
-        }
-    }
-
-    private func promptMove() {
-        let panel = NSOpenPanel()
-        panel.title = "Move Note"
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = true
-
-        guard panel.runModal() == .OK, let destination = panel.url else { return }
-        Task {
-            await workspaceSession.moveCurrentNote(to: destination)
-        }
-    }
 }
 
-private struct EditorialNoteSurface<PropertiesContent: View, EditorContent: View>: View {
+private struct EditorialNoteSurface<HeaderContextMenu: View, PropertiesContent: View, EditorContent: View>: View {
     @Binding var title: String
     let autosaveState: AutosaveState
+    @ViewBuilder let headerContextMenu: () -> HeaderContextMenu
     @ViewBuilder let propertiesContent: () -> PropertiesContent
     @ViewBuilder let editorContent: () -> EditorContent
     let conflictMessage: String?
@@ -203,6 +145,7 @@ private struct EditorialNoteSurface<PropertiesContent: View, EditorContent: View
 
                 AutosaveBadge(state: autosaveState)
             }
+            .contextMenu(menuItems: headerContextMenu)
 
             propertiesContent()
 

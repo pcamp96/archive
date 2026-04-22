@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -121,6 +122,11 @@ final class WorkspaceSession {
         return notes.first(where: { $0.id == selectedNoteID })
     }
 
+    var currentEditorNoteSummary: NoteSummary? {
+        guard let editorNoteID = editorSession?.noteID else { return nil }
+        return notes.first(where: { $0.id == editorNoteID })
+    }
+
     var activeBoardView: SavedBoardView? {
         if let selectedID = browserState.selectedBoardViewID ?? viewPreferences.selectedBoardViewID {
             return viewPreferences.savedBoardViews.first(where: { $0.id == selectedID })
@@ -165,6 +171,15 @@ final class WorkspaceSession {
         Task {
             await openNote(summary, requestNonce: openRequestNonce)
         }
+    }
+
+    func selectNote(_ summary: NoteSummary) {
+        browserState.selectedNoteID = summary.id
+    }
+
+    func revealNote(_ summary: NoteSummary) {
+        browserState.selectedNoteID = summary.id
+        openNote(summary)
     }
 
     func createNote(in folderURL: URL? = nil) async {
@@ -498,14 +513,15 @@ final class WorkspaceSession {
     }
 
     func renameCurrentNote(to filename: String) async {
-        guard let noteID = currentNoteSummary?.id,
-              let currentNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
-        guard await flushActiveEditorIfNeeded(
-            matching: currentNoteSummary.id,
+        guard let currentNoteSummary else { return }
+        await renameNote(currentNoteSummary, to: filename)
+    }
+
+    func renameNote(_ note: NoteSummary, to filename: String) async {
+        guard let preparedNoteSummary = await prepareNoteForFileMutation(
+            note,
             fallbackMessage: "Save the current note before renaming or moving it."
         ) else { return }
-        await waitForPendingBackgroundRename(for: noteID)
-        guard let preparedNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
 
         do {
             let destination = try await workspaceRepository.renameNote(
@@ -514,7 +530,7 @@ final class WorkspaceSession {
             )
             await refresh()
             if let summary = notes.first(where: { $0.fileURL == destination }) {
-                openNote(summary)
+                revealNote(summary)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -522,14 +538,15 @@ final class WorkspaceSession {
     }
 
     func moveCurrentNote(to folderURL: URL) async {
-        guard let noteID = currentNoteSummary?.id,
-              let currentNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
-        guard await flushActiveEditorIfNeeded(
-            matching: currentNoteSummary.id,
+        guard let currentNoteSummary else { return }
+        await moveNote(currentNoteSummary, to: folderURL)
+    }
+
+    func moveNote(_ note: NoteSummary, to folderURL: URL) async {
+        guard let preparedNoteSummary = await prepareNoteForFileMutation(
+            note,
             fallbackMessage: "Save the current note before renaming or moving it."
         ) else { return }
-        await waitForPendingBackgroundRename(for: noteID)
-        guard let preparedNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
 
         do {
             let destination = try await workspaceRepository.moveNote(
@@ -538,7 +555,7 @@ final class WorkspaceSession {
             )
             await refresh()
             if let summary = notes.first(where: { $0.fileURL == destination }) {
-                openNote(summary)
+                revealNote(summary)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -546,27 +563,36 @@ final class WorkspaceSession {
     }
 
     func deleteCurrentNote() async {
-        guard let noteID = currentNoteSummary?.id,
-              let currentNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
-        guard await flushActiveEditorIfNeeded(
-            matching: currentNoteSummary.id,
+        guard let currentNoteSummary else { return }
+        await deleteNote(currentNoteSummary)
+    }
+
+    func deleteNote(_ note: NoteSummary) async {
+        guard let preparedNoteSummary = await prepareNoteForFileMutation(
+            note,
             fallbackMessage: "Save the current note before deleting it."
         ) else { return }
-        await waitForPendingBackgroundRename(for: noteID)
-        guard let preparedNoteSummary = notes.first(where: { $0.id == noteID }) else { return }
 
         do {
             try await workspaceRepository.deleteNote(at: preparedNoteSummary.fileURL)
-            if browserState.selectedNoteID == noteID {
+            if browserState.selectedNoteID == preparedNoteSummary.id {
                 browserState.selectedNoteID = nil
             }
-            if editorSession?.noteID == noteID {
+            if editorSession?.noteID == preparedNoteSummary.id {
                 editorSession = nil
             }
             await refresh()
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func revealNoteInFinder(_ note: NoteSummary) {
+        NSWorkspace.shared.activateFileViewerSelecting([note.fileURL])
+    }
+
+    func copyRelativePath(for note: NoteSummary) {
+        exportService.copyPlainText(note.relativePath)
     }
 
     func createProperty(_ state: PropertyCreationState, addToCurrentNote: Bool) async {
@@ -715,6 +741,17 @@ final class WorkspaceSession {
             await workspaceRepository.updateSearchIndex(with: summary)
             await refreshSearch()
         }
+    }
+
+    private func prepareNoteForFileMutation(_ note: NoteSummary, fallbackMessage: String) async -> NoteSummary? {
+        guard await flushActiveEditorIfNeeded(
+            matching: note.id,
+            fallbackMessage: fallbackMessage
+        ) else {
+            return nil
+        }
+        await waitForPendingBackgroundRename(for: note.id)
+        return notes.first(where: { $0.id == note.id }) ?? note
     }
 }
 

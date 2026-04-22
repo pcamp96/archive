@@ -791,6 +791,51 @@ struct WorkspaceSessionTests {
     }
 
     @Test
+    func deleteCurrentNoteClearsSelectionAndEditor() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let noteURL = root.appendingPathComponent("Draft.md")
+        try Data(
+            """
+            ---
+            title: Draft
+            ---
+
+            Original body
+            """.utf8
+        ).write(to: noteURL, options: .atomic)
+
+        let dependencies = makeDependencies()
+        let session = makeSession(
+            root: root,
+            workspaceRepository: dependencies.workspaceRepository,
+            noteRepository: dependencies.noteRepository,
+            defaults: dependencies.defaults
+        )
+        defer {
+            dependencies.defaults.removePersistentDomain(forName: dependencies.suiteName)
+        }
+
+        let document = try await dependencies.noteRepository.loadDocument(
+            at: noteURL,
+            relativeTo: root,
+            registry: session.propertyRegistry
+        )
+
+        session.notes = [NoteSummary(document: document)]
+        session.browserState.selectedNoteID = document.id
+        session.editorSession = EditorSession(note: document, exportService: ExportService(renderer: MarkdownHTMLRenderer()))
+
+        await session.deleteCurrentNote()
+
+        #expect(FileManager.default.fileExists(atPath: noteURL.path) == false)
+        #expect(session.browserState.selectedNoteID == nil)
+        #expect(session.editorSession == nil)
+        #expect(session.notes.isEmpty)
+    }
+
+    @Test
     func moveNotePreservesDirtyDraftForCurrentEditor() async throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

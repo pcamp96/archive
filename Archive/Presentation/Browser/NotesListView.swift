@@ -30,6 +30,9 @@ struct NotesListView: View {
                 }
                 .padding(.vertical, 4)
                 .tag(note.id)
+                .contextMenu {
+                    NoteContextMenuContent(session: session, note: note)
+                }
             }
         }
     }
@@ -43,7 +46,7 @@ struct NotesListView: View {
                       let summary = session.filteredNotes.first(where: { $0.id == noteID }) ?? session.notes.first(where: { $0.id == noteID }) else {
                     return
                 }
-                session.openNote(summary)
+                session.revealNote(summary)
             }
         )
     }

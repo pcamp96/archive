@@ -18,6 +18,13 @@ struct NotesBrowserView: View {
         .task(id: session.browserState.searchQuery) {
             await session.refreshSearch()
         }
+        .contextMenu {
+            Button("New Note", systemImage: "plus") {
+                Task {
+                    await session.createNote(in: session.selectedFolderURL ?? session.rootURL)
+                }
+            }
+        }
         .toolbar {
             ToolbarItemGroup {
                 Picker("View", selection: presentationModeBinding) {
